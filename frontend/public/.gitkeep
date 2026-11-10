@@ -1,0 +1,4 @@
+# AI File Workspace frontend
+
+Next.js 14 App Router UI. `public/` is populated at install time with the PDF.js worker
+(see `scripts/copy-pdf-worker.mjs`).

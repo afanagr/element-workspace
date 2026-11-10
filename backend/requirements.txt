@@ -1,0 +1,36 @@
+# --- web ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+anyio==4.7.0
+
+# --- persistence ---
+SQLAlchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+redis==5.2.1
+celery==5.4.0
+kombu==5.4.2
+qdrant-client==1.12.1
+
+# --- llm providers ---
+openai==1.59.3
+anthropic==0.42.0
+google-genai==1.0.0
+httpx==0.28.1
+
+# --- parsing / generation ---
+openpyxl==3.1.5
+pandas==2.2.3
+xlrd==2.0.1
+python-docx==1.1.2
+pdfplumber==0.11.5
+Pillow==11.1.0
+pytesseract==0.3.13
+reportlab==4.2.5
+charset-normalizer==3.4.1
+
+# --- security ---
+cryptography==44.0.0

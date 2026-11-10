@@ -1,0 +1,4 @@
+# Optional local embedding backend (EMBEDDING_PROVIDER=local).
+# Torch is installed from the CPU wheel index inside the Dockerfile before this
+# file, so sentence-transformers does not pull the CUDA build.
+sentence-transformers==3.3.1

@@ -1,0 +1,261 @@
+import type {
+  AgentEvent,
+  Citation,
+  HealthResponse,
+  IndexStatus,
+  Preferences,
+  ProvidersResponse,
+  SessionInfo,
+  SettingsResponse,
+  TextPreview,
+  UploadResult,
+  VersionInfo,
+  WorkNode,
+} from './types';
+
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
+
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isForm = typeof FormData !== 'undefined' && init?.body instanceof FormData;
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      ...(isForm ? {} : { 'Content-Type': 'application/json' }),
+      ...(init?.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      if (body?.detail) {
+        detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+      }
+    } catch {
+      /* non-json error body */
+    }
+    throw new ApiError(detail, response.status);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    return (await response.text()) as unknown as T;
+  }
+  return (await response.json()) as T;
+}
+
+export interface UploadEntry {
+  file: File;
+  path: string;
+}
+
+export const api = {
+  health: () => request<HealthResponse>('/api/health'),
+
+  tree: () => request<WorkNode[]>('/api/tree'),
+  createProject: (name: string) =>
+    request<WorkNode>('/api/projects', { method: 'POST', body: JSON.stringify({ name }) }),
+  createFolder: (parentId: string, name: string) =>
+    request<WorkNode>('/api/folders', {
+      method: 'POST',
+      body: JSON.stringify({ parent_id: parentId, name }),
+    }),
+  updateNode: (nodeId: string, payload: { name?: string; parent_id?: string | null }) =>
+    request<WorkNode>(`/api/nodes/${nodeId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteNode: (nodeId: string) =>
+    request<{ deleted: boolean; items: number }>(`/api/nodes/${nodeId}`, { method: 'DELETE' }),
+  reindex: (nodeId: string) =>
+    request<{ queued: number }>(`/api/nodes/${nodeId}/reindex`, { method: 'POST' }),
+  indexStatus: () => request<IndexStatus>('/api/index/status'),
+
+  upload: async (parentId: string, entries: UploadEntry[]): Promise<UploadResult> => {
+    const form = new FormData();
+    form.append('parent_id', parentId);
+    for (const entry of entries) {
+      form.append('files', entry.file);
+      form.append('paths', entry.path);
+    }
+    return request<UploadResult>('/api/upload', { method: 'POST', body: form });
+  },
+
+  extract: async (nodeId: string, file: File): Promise<{ count: number }> => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<{ count: number }>(`/api/nodes/${nodeId}/extract`, {
+      method: 'POST',
+      body: form,
+    });
+  },
+
+  downloadUrl: (nodeId: string) => `${API_BASE}/api/nodes/${nodeId}/download`,
+  contentUrl: (nodeId: string, download = false) =>
+    `${API_BASE}/api/nodes/${nodeId}/content${download ? '?download=true' : ''}`,
+  text: (nodeId: string) => request<TextPreview>(`/api/nodes/${nodeId}/text`),
+  versions: (nodeId: string) => request<VersionInfo[]>(`/api/nodes/${nodeId}/versions`),
+  revertVersion: (nodeId: string, versionId: string) =>
+    request<WorkNode>(`/api/nodes/${nodeId}/versions/${versionId}/revert`, { method: 'POST' }),
+
+  sessions: () => request<SessionInfo[]>('/api/sessions'),
+  createSession: (payload: { title?: string; project_id?: string | null } = {}) =>
+    request<SessionInfo>('/api/sessions', { method: 'POST', body: JSON.stringify(payload) }),
+  sessionMessages: (sessionId: string) =>
+    request<
+      {
+        id: string;
+        role: string;
+        content: string;
+        provider: string | null;
+        model: string | null;
+        tool_calls: Record<string, unknown>[] | null;
+        citations: Citation[] | null;
+        usage: Record<string, number> | null;
+        error: string | null;
+        created_at: string;
+      }[]
+    >(`/api/sessions/${sessionId}/messages`),
+  deleteSession: (sessionId: string) =>
+    request<{ deleted: boolean }>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
+
+  providers: () => request<ProvidersResponse>('/api/providers'),
+  settings: () => request<SettingsResponse>('/api/settings'),
+  saveCredential: (payload: {
+    provider: string;
+    api_key?: string | null;
+    base_url?: string | null;
+    default_model?: string | null;
+    enabled?: boolean | null;
+  }) =>
+    request<{ saved: boolean }>('/api/settings/credentials', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  savePreferences: (payload: Partial<Preferences>) =>
+    request<{ preferences: Preferences; reindex_required?: boolean }>(
+      '/api/settings/preferences',
+      { method: 'PUT', body: JSON.stringify(payload) },
+    ),
+  testProvider: (provider: string) =>
+    request<{ provider: string; ok: boolean; message: string; latency_ms: number; models: string[] }>(
+      `/api/providers/${provider}/test`,
+      { method: 'POST' },
+    ),
+  providerModels: (provider: string) =>
+    request<{ models: string[]; dynamic: boolean; error?: string }>(
+      `/api/providers/${provider}/models`,
+    ),
+  testEmbeddings: (provider?: string, model?: string) => {
+    const params = new URLSearchParams();
+    if (provider) params.set('provider', provider);
+    if (model) params.set('model', model);
+    const query = params.toString();
+    return request<{
+      ok: boolean;
+      provider?: string;
+      model?: string;
+      dimension?: number;
+      message?: string;
+    }>(`/api/embeddings/test${query ? `?${query}` : ''}`, { method: 'POST' });
+  },
+
+  ragSearch: (payload: {
+    query: string;
+    node_ids?: string[];
+    project_id?: string | null;
+    top_k?: number;
+  }) =>
+    request<{ citations: Citation[]; error: string | null }>('/api/rag/search', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  revertOperation: (operationId: string) =>
+    request<{ reverted: boolean; description: string }>(`/api/operations/${operationId}/revert`, {
+      method: 'POST',
+    }),
+};
+
+export interface StreamCallbacks {
+  onEvent: (event: AgentEvent) => void;
+  onDone: () => void;
+  onError: (message: string) => void;
+}
+
+/** NDJSON fallback when WebSockets are unavailable (corporate proxies, etc.). */
+export async function streamMessageRest(
+  sessionId: string,
+  payload: {
+    content: string;
+    provider?: string | null;
+    model?: string | null;
+    attachments: string[];
+    use_rag: boolean;
+  },
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/sessions/${sessionId}/message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    callbacks.onError(`HTTP ${response.status}: ${response.statusText}`);
+    callbacks.onDone();
+    return;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          callbacks.onEvent(JSON.parse(trimmed) as AgentEvent);
+        } catch {
+          /* ignore malformed frame */
+        }
+      }
+    }
+    if (buffer.trim()) {
+      try {
+        callbacks.onEvent(JSON.parse(buffer) as AgentEvent);
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch (error) {
+    callbacks.onError(error instanceof Error ? error.message : String(error));
+  } finally {
+    callbacks.onDone();
+  }
+}
+
+export function websocketUrl(sessionId: string): string {
+  const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin : '');
+  const url = new URL(`/api/ws/chat/${sessionId}`, base || 'http://localhost:3000');
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
+}
+
