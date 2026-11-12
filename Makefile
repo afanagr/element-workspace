@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 COMPOSE := docker compose
 
-.PHONY: help up down restart logs ps build reset seed-local pull-model backend-shell worker-shell psql
+.PHONY: help up down restart logs ps build reset backend-shell worker-shell psql
 
 help:
 	@echo "Element Workspace"
@@ -11,16 +11,15 @@ help:
 	@echo "  make reset       Stop and remove ALL data (postgres, qdrant, workspace)"
 	@echo "  make build       Rebuild images"
 	@echo "  make ps          Show container status"
-	@echo "  make pull-model  Pull OLLAMA_MODEL into the local-llm profile"
 	@echo "  make backend-shell / worker-shell / psql   Debug shells"
 
 up:
-	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example - add your API key and re-run make up")
+	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example - set ADMIN_PASSWORD and APP_SECRET_KEY, then re-run make up")
 	$(COMPOSE) up -d --build
 	@echo "Open http://localhost:$${APP_PORT:-3000}"
 
 down:
-	$(COMPOSE) --profile local-llm down
+	$(COMPOSE) down
 
 restart:
 	$(COMPOSE) restart
@@ -36,11 +35,7 @@ build:
 
 reset:
 	@echo "This deletes postgres, qdrant, redis and the workspace volume."
-	$(COMPOSE) --profile local-llm down -v --remove-orphans
-
-pull-model:
-	$(COMPOSE) --profile local-llm up -d ollama
-	$(COMPOSE) exec ollama ollama pull $${OLLAMA_MODEL:-llama3.2}
+	$(COMPOSE) down -v --remove-orphans
 
 backend-shell:
 	$(COMPOSE) exec backend bash

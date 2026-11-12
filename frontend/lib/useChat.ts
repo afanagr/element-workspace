@@ -16,6 +16,8 @@ import type {
 interface UseChatOptions {
   onWorkspaceChanged: () => void;
   onOpenCitation: (nodeId: string) => void;
+  /** Chat is always bound to a project; without one there is nothing to talk about. */
+  projectId: string | null;
 }
 
 interface ActiveModel {
@@ -129,6 +131,9 @@ export function useChat(options: UseChatOptions): ChatController {
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const projectId = options.projectId ?? null;
+  const projectRef = useRef<string | null>(projectId);
+  projectRef.current = projectId;
 
   const setStreamingState = useCallback((value: boolean) => {
     streamingRef.current = value;
@@ -395,7 +400,12 @@ export function useChat(options: UseChatOptions): ChatController {
   );
 
   const newSession = useCallback(async () => {
-    const created = await api.createSession({});
+    const pid = projectRef.current;
+    if (!pid) {
+      setError({ message: 'Select a project before starting a chat', code: 'no_project' });
+      return;
+    }
+    const created = await api.createSession({ project_id: pid });
     setSessions((prev) => [created, ...prev]);
     await openSession(created.id, created);
   }, [openSession]);
@@ -423,17 +433,45 @@ export function useChat(options: UseChatOptions): ChatController {
   }, [setStreamingState]);
 
   useEffect(() => {
+    closedRef.current = true;
+    if (reconnectRef.current) clearTimeout(reconnectRef.current);
+    const previous = socketRef.current;
+    socketRef.current = null;
+    if (previous) {
+      previous.onopen = null;
+      previous.onmessage = null;
+      previous.onerror = null;
+      previous.onclose = null;
+      try {
+        previous.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    setConnected(false);
+    setStreamingState(false);
+    sessionRef.current = null;
+    setSessionId(null);
+    setMessages([]);
+    setSessions([]);
+    setError(null);
+    setNotice(null);
+    setCitations([]);
+    setUsage(null);
+
+    if (!projectId) {
+      return () => undefined;
+    }
+
     closedRef.current = false;
     let cancelled = false;
     void (async () => {
       try {
-        const list = await api.sessions();
+        const list = await api.sessions(projectId);
         if (cancelled) return;
         setSessions(list);
         if (list.length > 0) {
           await openSession(list[0].id);
-        } else if (!sessionRef.current) {
-          await newSession();
         }
       } catch (err) {
         if (!cancelled) setError({ message: err instanceof Error ? err.message : String(err) });
@@ -453,7 +491,7 @@ export function useChat(options: UseChatOptions): ChatController {
         socket.close();
       }
     };
-  }, [newSession, openSession]);
+  }, [projectId, openSession, setStreamingState]);
 
   const send = useCallback(
     async (
@@ -468,7 +506,12 @@ export function useChat(options: UseChatOptions): ChatController {
 
       let sid = sessionRef.current;
       if (!sid) {
-        const created = await api.createSession({});
+        const pid = projectRef.current;
+        if (!pid) {
+          setError({ message: 'Select a project before sending a message', code: 'no_project' });
+          return;
+        }
+        const created = await api.createSession({ project_id: pid });
         sid = created.id;
         sessionRef.current = sid;
         setSessionId(sid);

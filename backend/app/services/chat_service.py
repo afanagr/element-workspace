@@ -19,14 +19,32 @@ async def create_session(
     project_id: uuid.UUID | None = None,
     provider: str | None = None,
     model: str | None = None,
+    owner_id: uuid.UUID | None = None,
 ) -> ChatSession:
-    session = ChatSession(title=title[:250] or "New chat", project_id=project_id, provider=provider, model=model)
+    session = ChatSession(
+        title=title[:250] or "New chat",
+        project_id=project_id,
+        provider=provider,
+        model=model,
+        owner_id=owner_id,
+    )
     db.add(session)
     await db.flush()
     return session
 
 
-async def get_session(db: AsyncSession, session_id: uuid.UUID | str) -> ChatSession:
+def ensure_session_access(session: ChatSession, user: object) -> ChatSession:
+    """Chats are private: only the owner (or an administrator) may open them."""
+    if getattr(user, "is_admin", False):
+        return session
+    if session.owner_id != getattr(user, "id", None):
+        raise NodeError("Chat session not found", status_code=404)
+    return session
+
+
+async def get_session(
+    db: AsyncSession, session_id: uuid.UUID | str, user: object | None = None
+) -> ChatSession:
     try:
         identifier = uuid.UUID(str(session_id))
     except (ValueError, AttributeError) as exc:
@@ -34,13 +52,25 @@ async def get_session(db: AsyncSession, session_id: uuid.UUID | str) -> ChatSess
     session = await db.get(ChatSession, identifier)
     if session is None:
         raise NodeError("Chat session not found", status_code=404)
+    if user is not None:
+        ensure_session_access(session, user)
     return session
 
 
-async def list_sessions(db: AsyncSession, limit: int = 50) -> list[ChatSession]:
-    result = await db.execute(
-        select(ChatSession).order_by(ChatSession.updated_at.desc()).limit(limit)
-    )
+async def list_sessions(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
+    limit: int = 50,
+) -> list[ChatSession]:
+    stmt = select(ChatSession)
+    if owner_id is not None:
+        stmt = stmt.where(ChatSession.owner_id == owner_id)
+    if project_id is not None:
+        stmt = stmt.where(ChatSession.project_id == project_id)
+    stmt = stmt.order_by(ChatSession.updated_at.desc()).limit(limit)
+    result = await db.execute(stmt)
     return list(result.scalars().all())
 
 

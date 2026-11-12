@@ -3,27 +3,19 @@ name: ai-file-workspace
 x-app-env: &app-env
   APP_NAME: "Element Workspace"
   APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-insecure-secret-change-me}
-  APP_USER_TOKEN: ${APP_USER_TOKEN:-}
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+  SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-336}
   DATABASE_URL: postgresql+asyncpg://workspace:${POSTGRES_PASSWORD:-workspace}@postgres:5432/workspace
   REDIS_URL: redis://redis:6379/0
   QDRANT_URL: http://qdrant:6333
   QDRANT_COLLECTION: ${QDRANT_COLLECTION:-workspace_documents}
   WORKSPACE_DIR: /data/workspace
-  LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-  LLM_MODEL: ${LLM_MODEL:-gpt-4o}
-  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-  GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+  LLM_PROVIDER: deepseek
+  LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-  GROQ_API_KEY: ${GROQ_API_KEY:-}
-  TOGETHER_API_KEY: ${TOGETHER_API_KEY:-}
-  XAI_API_KEY: ${XAI_API_KEY:-}
-  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-  OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
-  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
-  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+  EMBEDDING_PROVIDER: local
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
   LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
   CHUNK_SIZE: ${CHUNK_SIZE:-1200}
   CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
@@ -159,26 +151,8 @@ services:
       frontend:
         condition: service_healthy
 
-  ollama:
-    image: ollama/ollama:0.5.7
-    profiles: ["local-llm"]
-    restart: unless-stopped
-    volumes:
-      - ollama_data:/root/.ollama
-    expose:
-      - "11434"
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 20s
-
 volumes:
   postgres_data:
   qdrant_data:
   redis_data:
   workspace_data:
-  ollama_data:

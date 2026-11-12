@@ -18,6 +18,8 @@ class NodeOut(ORMModel):
     id: uuid.UUID
     parent_id: uuid.UUID | None = None
     project_id: uuid.UUID | None = None
+    owner_id: uuid.UUID | None = None
+    owner: str | None = None
     name: str
     kind: Literal["project", "folder", "file"]
     mime: str | None = None
@@ -181,4 +183,74 @@ class HealthOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+# -------------------------------------------------------------------- auth
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class UserStatsOut(BaseModel):
+    projects: int = 0
+    files: int = 0
+    sessions: int = 0
+    chunks: int = 0
+
+
+class UserOut(ORMModel):
+    id: uuid.UUID
+    username: str
+    display_name: str = ""
+    role: Literal["admin", "user"]
+    is_admin: bool = False
+    is_active: bool = True
+    deepseek_configured: bool = False
+    deepseek_key_masked: str = ""
+    deepseek_model: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    stats: UserStatsOut | None = None
+
+
+class LoginOut(BaseModel):
+    token: str
+    expires_at: datetime
+    user: UserOut
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=6, max_length=200)
+
+
+class UserCreateIn(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=6, max_length=200)
+    display_name: str = Field(default="", max_length=120)
+    role: Literal["admin", "user"] = "user"
+    deepseek_api_key: str | None = Field(default=None, max_length=200)
+    deepseek_model: str | None = Field(default=None, max_length=64)
+
+
+class UserUpdateIn(BaseModel):
+    display_name: str | None = Field(default=None, max_length=120)
+    password: str | None = Field(default=None, min_length=6, max_length=200)
+    role: Literal["admin", "user"] | None = None
+    is_active: bool | None = None
+    deepseek_api_key: str | None = Field(default=None, max_length=200)
+    deepseek_model: str | None = Field(default=None, max_length=64)
+    clear_deepseek_key: bool = False
+
+
+class AdminProjectOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    owner_id: uuid.UUID | None = None
+    owner: str | None = None
+    files: int = 0
+    chunks: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 NodeOut.model_rebuild()
+

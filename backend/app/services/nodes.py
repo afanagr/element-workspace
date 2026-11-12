@@ -105,6 +105,36 @@ async def get_node(db: AsyncSession, node_id: uuid.UUID | str, *, allow_missing:
     return node  # type: ignore[return-value]
 
 
+def ensure_access(node: Node, user: object) -> Node:
+    """Raise 404 when a non-admin user reaches a node they do not own.
+
+    A 404 (instead of 403) keeps other users' projects invisible: an attacker
+    cannot tell an existing node from a non-existing one.
+    """
+    if getattr(user, "is_admin", False):
+        return node
+    if node.owner_id != getattr(user, "id", None):
+        raise NodeError("Node not found", status_code=404)
+    return node
+
+
+async def get_node_for(db: AsyncSession, node_id: uuid.UUID | str, user: object) -> Node:
+    """Fetch a node and verify that ``user`` may see it."""
+    return ensure_access(await get_node(db, node_id), user)
+
+
+async def get_project_for(
+    db: AsyncSession, project_id: uuid.UUID | str | None, user: object
+) -> Node | None:
+    """Resolve a project node, checking ownership."""
+    if not project_id:
+        return None
+    node = await get_node_for(db, project_id, user)
+    if node.kind != "project":
+        raise NodeError("Not a project")
+    return node
+
+
 async def list_children(db: AsyncSession, parent_id: uuid.UUID | None) -> list[Node]:
     stmt = select(Node).where(Node.parent_id == parent_id)
     stmt = stmt.order_by(Node.kind.desc(), func.lower(Node.name))
@@ -167,9 +197,11 @@ async def unique_name(
 
 
 # ------------------------------------------------------------------ creation
-async def create_project(db: AsyncSession, name: str, created_by: str = "user") -> Node:
+async def create_project(
+    db: AsyncSession, name: str, created_by: str = "user", owner_id: uuid.UUID | None = None
+) -> Node:
     safe = await unique_name(db, None, sanitize_name(name))
-    node = Node(name=safe, kind="project", parent_id=None, created_by=created_by)
+    node = Node(name=safe, kind="project", parent_id=None, created_by=created_by, owner_id=owner_id)
     db.add(node)
     await db.flush()
     node.project_id = node.id
@@ -190,6 +222,7 @@ async def create_folder(
         kind="folder",
         parent_id=parent.id,
         project_id=project.id if project else None,
+        owner_id=parent.owner_id,
         created_by=created_by,
     )
     db.add(node)
@@ -288,6 +321,7 @@ async def create_file(
         kind="file",
         parent_id=parent.id,
         project_id=project.id if project else None,
+        owner_id=parent.owner_id,
         mime=mime_for(safe),
         size=len(data),
         storage_key=None,
@@ -494,6 +528,8 @@ def node_to_dict(node: Node) -> dict[str, Any]:
         "id": str(node.id),
         "parent_id": str(node.parent_id) if node.parent_id else None,
         "project_id": str(node.project_id) if node.project_id else None,
+        "owner_id": str(node.owner_id) if node.owner_id else None,
+        "owner": None,
         "name": node.name,
         "kind": node.kind,
         "mime": node.mime,
@@ -510,7 +546,19 @@ def node_to_dict(node: Node) -> dict[str, Any]:
     }
 
 
-async def build_tree(db: AsyncSession, project_id: uuid.UUID | str | None = None) -> list[dict[str, Any]]:
+async def build_tree(
+    db: AsyncSession,
+    project_id: uuid.UUID | str | None = None,
+    *,
+    owner_id: uuid.UUID | str | None = None,
+    with_owners: bool = False,
+) -> list[dict[str, Any]]:
+    """Build the tree for one project, one owner, or the whole workspace.
+
+    ``owner_id`` restricts the listing to a single account (normal users always
+    pass their own id); ``with_owners`` adds usernames so an administrator can
+    tell whose project is whose.
+    """
     from collections import defaultdict
 
     from sqlalchemy import or_
@@ -522,6 +570,8 @@ async def build_tree(db: AsyncSession, project_id: uuid.UUID | str | None = None
         except ValueError as exc:
             raise NodeError("Invalid project id") from exc
         stmt = stmt.where(or_(Node.id == pid, Node.project_id == pid))
+    if owner_id:
+        stmt = stmt.where(Node.owner_id == uuid.UUID(str(owner_id)))
     result = await db.execute(stmt)
     nodes = list(result.scalars().all())
     by_parent: dict[uuid.UUID | None, list[Node]] = defaultdict(list)
@@ -548,7 +598,32 @@ async def build_tree(db: AsyncSession, project_id: uuid.UUID | str | None = None
             output.append(item)
         return output
 
-    return build(None, 0)
+    tree = build(None, 0)
+    if with_owners:
+        await _attach_owner_names(db, tree)
+    return tree
+
+
+async def _attach_owner_names(db: AsyncSession, tree: list[dict[str, Any]]) -> None:
+    from app.models import User
+
+    owner_ids = {
+        item["owner_id"] for item in tree if item.get("kind") == "project" and item.get("owner_id")
+    }
+    if not owner_ids:
+        return
+    result = await db.execute(
+        select(User.id, User.username, User.display_name).where(
+            User.id.in_([uuid.UUID(value) for value in owner_ids])
+        )
+    )
+    names = {
+        str(row[0]): (row[2] or row[1]) for row in result.all()
+    }
+    for item in tree:
+        if item.get("kind") == "project" and item.get("owner_id"):
+            item["owner"] = names.get(item["owner_id"])
+
 
 
 

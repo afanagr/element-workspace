@@ -14,7 +14,7 @@ from app.config import settings
 from app.db import get_db
 from app.deps import current_user
 from app.logging_config import get_logger
-from app.models import Node, NodeVersion
+from app.models import Node, NodeVersion, User
 from app.schemas import (
     CreateFolderIn,
     CreateProjectIn,
@@ -45,18 +45,32 @@ CurrentUser = Depends(current_user)
 
 @router.get("/tree", response_model=list[NodeOut])
 async def get_tree(
-    project_id: uuid.UUID | None = Query(default=None), db: AsyncSession = Depends(get_db)
+    project_id: uuid.UUID | None = Query(default=None),
+    owner_id: uuid.UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
 ) -> list[dict]:
-    return await node_service.build_tree(db, project_id)
+    """Workspace tree.
+
+    Users only ever see their own projects. An administrator sees everything and
+    may narrow the listing to a single account with ``owner_id``.
+    """
+    if user.is_admin:
+        return await node_service.build_tree(
+            db, project_id, owner_id=owner_id, with_owners=True
+        )
+    return await node_service.build_tree(db, project_id, owner_id=user.id)
 
 
 @router.post("/projects", response_model=NodeOut, status_code=201)
 async def create_project(
     payload: CreateProjectIn,
     db: AsyncSession = Depends(get_db),
-    user: str = CurrentUser,
+    user: User = CurrentUser,
 ) -> dict:
-    node = await node_service.create_project(db, payload.name, created_by=user)
+    node = await node_service.create_project(
+        db, payload.name, created_by=user.username, owner_id=user.id
+    )
     await db.commit()
     return node_service.node_to_dict(node)
 
@@ -65,9 +79,12 @@ async def create_project(
 async def create_folder(
     payload: CreateFolderIn,
     db: AsyncSession = Depends(get_db),
-    user: str = CurrentUser,
+    user: User = CurrentUser,
 ) -> dict:
-    node = await node_service.create_folder(db, payload.parent_id, payload.name, created_by=user)
+    parent = await node_service.get_node_for(db, payload.parent_id, user)
+    node = await node_service.create_folder(
+        db, parent.id, payload.name, created_by=user.username
+    )
     await db.commit()
     return node_service.node_to_dict(node)
 
@@ -78,11 +95,12 @@ async def upload_files(
     files: list[UploadFile] = File(...),
     paths: list[str] | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
-    user: str = CurrentUser,
+    user: User = CurrentUser,
 ) -> UploadResult:
-    parent = await node_service.get_node(db, parent_id)
+    parent = await node_service.get_node_for(db, parent_id, user)
     if parent.kind == "file":
         raise node_service.NodeError("Cannot upload into a file")
+    author = user.username
     items: list[UploadItem] = []
     errors: list[str] = []
     to_index: list[uuid.UUID] = []
@@ -112,14 +130,14 @@ async def upload_files(
                     current = existing
                 else:
                     current = await node_service.create_folder(
-                        db, current.id, folder_name, created_by=user
+                        db, current.id, folder_name, created_by=author
                     )
             node, replaced = await node_service.create_file(
                 db,
                 current.id,
                 filename,
                 raw,
-                created_by=user,
+                created_by=author,
                 note="uploaded from browser",
             )
             to_index.append(node.id)
@@ -143,8 +161,12 @@ async def upload_files(
 
 
 @router.get("/nodes/{node_id}/download")
-async def download_node(node_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    node = await node_service.get_node(db, node_id)
+async def download_node(
+    node_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+):
+    node = await node_service.get_node_for(db, node_id, user)
     if node.kind == "file":
         if not node.storage_key:
             raise node_service.NodeError("This file has no content", status_code=404)
@@ -162,8 +184,9 @@ async def node_content(
     node_id: uuid.UUID,
     download: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
 ):
-    node = await node_service.get_node(db, node_id)
+    node = await node_service.get_node_for(db, node_id, user)
     if node.kind != "file" or not node.storage_key:
         raise node_service.NodeError("This node has no viewable content", status_code=404)
     headers = {"Cache-Control": "private, max-age=0, must-revalidate"}
@@ -183,8 +206,9 @@ async def node_text(
     node_id: uuid.UUID,
     max_chars: int = Query(default=60000, ge=1000, le=200000),
     db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
 ) -> TextPreviewOut:
-    node = await node_service.get_node(db, node_id)
+    node = await node_service.get_node_for(db, node_id, user)
     if node.kind != "file" or not node.storage_key:
         raise node_service.NodeError("This node has no extractable text", status_code=404)
     data = await storage.read_bytes(node.storage_key)
@@ -208,8 +232,12 @@ async def node_text(
 
 
 @router.get("/nodes/{node_id}/versions", response_model=list[VersionOut])
-async def list_versions(node_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> list[NodeVersion]:
-    node = await node_service.get_node(db, node_id)
+async def list_versions(
+    node_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> list[NodeVersion]:
+    node = await node_service.get_node_for(db, node_id, user)
     result = await db.execute(
         select(NodeVersion)
         .where(NodeVersion.node_id == node.id)
@@ -223,13 +251,13 @@ async def revert_version(
     node_id: uuid.UUID,
     version_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: str = CurrentUser,
+    user: User = CurrentUser,
 ) -> dict:
-    node = await node_service.get_node(db, node_id)
+    node = await node_service.get_node_for(db, node_id, user)
     version = await db.get(NodeVersion, version_id)
     if version is None or version.node_id != node.id:
         raise node_service.NodeError("Version not found", status_code=404)
-    await node_service.revert_to_version(db, node, version, created_by=user)
+    await node_service.revert_to_version(db, node, version, created_by=user.username)
     await db.commit()
     enqueue_index([node.id])
     return node_service.node_to_dict(node)
@@ -240,11 +268,12 @@ async def update_node(
     node_id: uuid.UUID,
     payload: UpdateNodeIn,
     db: AsyncSession = Depends(get_db),
-    user: str = CurrentUser,
+    user: User = CurrentUser,
 ) -> dict:
-    node = await node_service.get_node(db, node_id)
+    node = await node_service.get_node_for(db, node_id, user)
     if payload.parent_id is not None and payload.parent_id != node.parent_id:
-        node = await node_service.move_node(db, node, payload.parent_id)
+        target = await node_service.get_node_for(db, payload.parent_id, user)
+        node = await node_service.move_node(db, node, target.id)
     if payload.name:
         node = await node_service.rename_node(db, node, payload.name)
     if node.kind == "file":
@@ -260,9 +289,9 @@ async def update_node(
 async def delete_node(
     node_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: str = CurrentUser,
+    user: User = CurrentUser,
 ) -> dict:
-    node = await node_service.get_node(db, node_id)
+    node = await node_service.get_node_for(db, node_id, user)
     snapshot = await node_service.delete_node(db, node)
     await db.commit()
     for item in snapshot.get("nodes", []):
@@ -283,13 +312,13 @@ async def extract_into_folder(
     node_id: uuid.UUID,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    user: str = CurrentUser,
+    user: User = CurrentUser,
 ) -> ExtractResult:
-    parent = await node_service.get_node(db, node_id)
+    parent = await node_service.get_node_for(db, node_id, user)
     data = await file.read()
     await file.close()
     try:
-        created = await extract_archive(db, parent, data, created_by=user)
+        created = await extract_archive(db, parent, data, created_by=user.username)
     except node_service.NodeError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -303,8 +332,12 @@ async def extract_into_folder(
 
 
 @router.post("/nodes/{node_id}/reindex")
-async def reindex_node(node_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> dict:
-    node = await node_service.get_node(db, node_id)
+async def reindex_node(
+    node_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    node = await node_service.get_node_for(db, node_id, user)
     if node.kind == "file":
         targets: list[Node] = [node]
     else:
@@ -322,16 +355,24 @@ async def reindex_node(node_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -
 
 
 @router.get("/index/status")
-async def index_status(db: AsyncSession = Depends(get_db)) -> dict:
+async def index_status(
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
     from sqlalchemy import func
 
-    result = await db.execute(
+    stmt = (
         select(Node.index_status, func.count(Node.id))
         .where(Node.kind == "file")
         .group_by(Node.index_status)
     )
+    chunk_stmt = select(func.coalesce(func.sum(Node.chunk_count), 0)).where(Node.kind == "file")
+    if not user.is_admin:
+        stmt = stmt.where(Node.owner_id == user.id)
+        chunk_stmt = chunk_stmt.where(Node.owner_id == user.id)
+    result = await db.execute(stmt)
     counts = {status: count for status, count in result.all()}
-    chunk_result = await db.execute(select(func.coalesce(func.sum(Node.chunk_count), 0)))
+    chunk_result = await db.execute(chunk_stmt)
     try:
         points = await vector_store.count_points()
     except Exception:  # noqa: BLE001

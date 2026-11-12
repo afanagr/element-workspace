@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@/lib/api';
+import { useRequireAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import type { HealthResponse, IndexStatus, ProvidersResponse, WorkNode } from '@/lib/types';
 import { findNode, flatten } from '@/lib/utils';
@@ -23,6 +24,7 @@ const CHAT_WIDTH_KEY = 'afw-chat-width';
 
 export default function Workspace() {
   const { t } = useI18n();
+  const auth = useRequireAuth();
   const [tree, setTree] = useState<WorkNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProvidersResponse | null>(null);
@@ -32,7 +34,19 @@ export default function Workspace() {
   const [toast, setToast] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
   const [mobile, setMobile] = useState<MobileView>('viewer');
   const [chatWidth, setChatWidth] = useState(DEFAULT_CHAT_WIDTH);
+  const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
   const layoutRef = useRef<HTMLDivElement | null>(null);
+
+  // Administrators can open another account's workspace with ?owner=<uuid>
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const owner = params.get('owner');
+      if (owner) setOwnerFilter(owner);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -73,11 +87,11 @@ export default function Workspace() {
 
   const refreshTree = useCallback(async () => {
     try {
-      setTree(await api.tree());
+      setTree(await api.tree(ownerFilter));
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     }
-  }, [notify]);
+  }, [notify, ownerFilter]);
 
   const refreshProviders = useCallback(async () => {
     try {
@@ -103,7 +117,20 @@ export default function Workspace() {
     }
   }, []);
 
+  const selected = selectedId ? findNode(tree, selectedId) : null;
+
+  /** The project the chat is allowed to see: the selection's project root. */
+  const activeProject = useMemo(() => {
+    if (!selected) return null;
+    if (selected.kind === 'project') return selected;
+    if (!selected.project_id) return null;
+    return findNode(tree, selected.project_id);
+  }, [selected, tree]);
+
+  const activeProjectId = activeProject?.id ?? null;
+
   const chat = useChat({
+    projectId: activeProjectId,
     onWorkspaceChanged: () => {
       void refreshTree();
       void refreshIndex();
@@ -141,13 +168,16 @@ export default function Workspace() {
     return () => clearInterval(timer);
   }, [hasPending, refreshTree, refreshIndex]);
 
-  const selected = selectedId ? findNode(tree, selectedId) : null;
-
   useEffect(() => {
     if (selectedId && tree.length > 0 && !findNode(tree, selectedId)) {
       setSelectedId(null);
     }
   }, [tree, selectedId]);
+
+  // Leaving a project drops its attachments: context never leaks between projects.
+  useEffect(() => {
+    setAttachments([]);
+  }, [activeProjectId]);
 
   const attach = useCallback(
     (node: WorkNode) => {
@@ -179,6 +209,14 @@ export default function Workspace() {
     return t('app.indexSummary', { indexed, total, chunks: indexStatus.chunks });
   }, [indexStatus, t]);
 
+  if (auth.loading || !auth.user) {
+    return (
+      <div className="flex h-screen items-center justify-center text-sm text-slate-500 dark:text-zinc-400">
+        {t('common.loading')}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <TopBar
@@ -190,6 +228,8 @@ export default function Workspace() {
         activeProvider={chat.active.provider}
         activeModel={chat.active.model}
         indexSummary={indexSummary}
+        projectName={activeProject?.name ?? null}
+        viewingOwner={ownerFilter}
       />
 
       <div className="flex items-center gap-1 border-b px-2 py-1 lg:hidden">
@@ -211,6 +251,12 @@ export default function Workspace() {
           <a className="btn" href="/settings">
             {t('app.openSettings')}
           </a>
+        </div>
+      ) : null}
+
+      {!activeProjectId ? (
+        <div className="flex items-center gap-2 border-b border-indigo-200 bg-indigo-50 px-3 py-1.5 text-[11px] text-indigo-900 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">
+          <span className="flex-1">{t('app.selectProject')}</span>
         </div>
       ) : null}
 
@@ -242,6 +288,7 @@ export default function Workspace() {
             chat={chat}
             providers={providers}
             attachments={attachmentNodes}
+            projectLabel={activeProject?.name ?? null}
             onRemoveAttachment={(id) => setAttachments((prev) => prev.filter((item) => item !== id))}
             onAttachSelected={attachSelected}
             onOpenNode={(nodeId) => {

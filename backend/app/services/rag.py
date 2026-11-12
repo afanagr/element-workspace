@@ -71,9 +71,16 @@ async def retrieve(
     node_ids: Sequence[str] | None = None,
     top_k: int | None = None,
 ) -> RetrievalResult:
+    """Vector search limited to one project.
+
+    ``project_id`` is mandatory: the workspace never mixes documents of different
+    projects into one answer.
+    """
     query = (query or "").strip()
     if not query:
         return RetrievalResult(error="Empty query")
+    if not project_id:
+        return RetrievalResult(error="project_id is required for retrieval")
     try:
         resolved = await registry.resolve_embeddings(db)
     except NoProviderAvailable as exc:

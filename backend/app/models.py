@@ -1,4 +1,4 @@
-"""Database models: file tree, versions, chat, operations, provider keys, logs."""
+"""Database models: users, file tree, versions, chat, operations, logs."""
 
 from __future__ import annotations
 
@@ -39,6 +39,52 @@ class TimestampMixin:
     )
 
 
+class User(Base, TimestampMixin):
+    """Account created by an administrator.
+
+    ``role`` is either ``admin`` or ``user``. Every user gets an individual
+    DeepSeek key from the admin; the key is stored encrypted (Fernet) and never
+    leaves the API unmasked.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    role: Mapped[str] = mapped_column(String(16), default="user", nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    deepseek_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    deepseek_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
+    @property
+    def label(self) -> str:
+        return self.display_name or self.username
+
+
+class AuthToken(Base):
+    """Bearer token issued at login. Only the SHA-256 digest is stored."""
+
+    __tablename__ = "auth_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Node(Base, TimestampMixin):
     """A project (top-level), folder or file in the workspace tree.
 
@@ -54,6 +100,9 @@ class Node(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=True
     )
     project_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False, default="file")  # project|folder|file
     mime: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -81,6 +130,7 @@ class Node(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_nodes_parent_name", "parent_id", "name"),
         Index("ix_nodes_project_kind", "project_id", "kind"),
+        Index("ix_nodes_owner_kind", "owner_id", "kind"),
     )
 
     @property
@@ -119,6 +169,9 @@ class ChatSession(Base, TimestampMixin):
     provider: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     project_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     messages: Mapped[list["ChatMessage"]] = relationship(
         "ChatMessage",
@@ -170,21 +223,6 @@ class Operation(Base):
     reverted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
-    )
-
-
-class ProviderCredential(Base):
-    """Provider key/base-url overrides saved from the UI (encrypted at rest)."""
-
-    __tablename__ = "provider_credentials"
-
-    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
-    api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    base_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    default_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow, server_default=func.now(), nullable=False
     )
 
 

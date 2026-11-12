@@ -40,6 +40,9 @@ class ToolContext:
     session_id: uuid.UUID | None = None
     message_id: uuid.UUID | None = None
     project_id: str | None = None
+    owner_id: str | None = None
+    user: Any = None
+    is_admin: bool = False
     changed_nodes: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -119,11 +122,6 @@ TOOL_SPECS: list[ToolSpec] = [
         name="create_folder",
         description="Create a folder inside a project or another folder.",
         parameters=_obj({"parent_id": _STR, "name": _STR}, ["parent_id", "name"]),
-    ),
-    ToolSpec(
-        name="create_project",
-        description="Create a new top-level project (root folder).",
-        parameters=_obj({"name": _STR}, ["name"]),
     ),
     ToolSpec(
         name="rename_node",
@@ -253,12 +251,21 @@ def _version_undo(node: Node) -> dict[str, Any]:
 
 
 async def _resolve_node(ctx: ToolContext, node_id: Any) -> Node:
+    """Fetch a node and refuse anything outside the chat's project."""
     if not node_id:
         raise ToolError("node_id is required")
     try:
-        return await node_service.get_node(ctx.db, str(node_id))
+        node = await node_service.get_node(ctx.db, str(node_id))
     except node_service.NodeError as exc:
         raise ToolError(exc.message) from exc
+    if ctx.project_id:
+        same_project = str(node.project_id or node.id) == str(ctx.project_id)
+        if not same_project:
+            raise ToolError(
+                "That node belongs to a different project. The chat can only touch "
+                "files of the project it was opened in."
+            )
+    return node
 
 
 def _tree_lines(items: list[dict[str, Any]], depth: int = 0, max_depth: int = 8) -> list[str]:
@@ -282,12 +289,12 @@ def _tree_lines(items: list[dict[str, Any]], depth: int = 0, max_depth: int = 8)
 
 # ------------------------------------------------------------- read tools
 async def _list_workspace(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    project_id = args.get("project_id") or ctx.project_id
+    """List the current project only - the model cannot widen this scope."""
     max_depth = int(args.get("max_depth") or 8)
-    items = await node_service.build_tree(ctx.db, project_id)
+    items = await node_service.build_tree(ctx.db, ctx.project_id)
     lines = _tree_lines(items, 0, max_depth)
-    body = "\n".join(lines) if lines else "(workspace is empty - create a project first)"
-    return ToolResult(True, f"Workspace tree:\n{body}", {"count": len(lines)})
+    body = "\n".join(lines) if lines else "(this project is empty - create files first)"
+    return ToolResult(True, f"Project tree:\n{body}", {"count": len(lines)})
 
 
 async def _read_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -333,9 +340,10 @@ async def _search_documents(ctx: ToolContext, args: dict[str, Any]) -> ToolResul
     query = str(args.get("query") or "").strip()
     if not query:
         raise ToolError("query is required")
-    project_id = args.get("project_id") or ctx.project_id
+    if not ctx.project_id:
+        raise ToolError("This chat has no project scope")
     result = await retrieve(
-        ctx.db, query, project_id=project_id, top_k=int(args.get("top_k") or 6)
+        ctx.db, query, project_id=str(ctx.project_id), top_k=int(args.get("top_k") or 6)
     )
     if result.error:
         return ToolResult(False, f"Search unavailable: {result.error}")
@@ -357,27 +365,6 @@ def _force_reindex(node: Node) -> None:
     node.index_status = "pending"
     node.chunk_count = 0
     node.indexed_at = None
-
-
-async def _create_project(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-    name = str(args.get("name") or "").strip()
-    if not name:
-        raise ToolError("name is required")
-    node = await node_service.create_project(ctx.db, name, created_by="ai")
-    operation_id = await _record_operation(
-        ctx,
-        tool_name="create_project",
-        description=f"Create project '{node.name}'",
-        node_id=node.id,
-        undo={"action": "delete_node", "node_id": str(node.id)},
-    )
-    ctx.changed_nodes.append({"id": str(node.id), "event": "created"})
-    return ToolResult(
-        True,
-        f"Created project '{node.name}' (id={node.id}). Use this id as parent_id.",
-        {"node_id": str(node.id), "name": node.name},
-        operation_id,
-    )
 
 
 async def _create_folder(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -657,7 +644,7 @@ async def _translate_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     if not source:
         raise ToolError("This file contains no extractable text to translate")
 
-    resolved = await registry.resolve(ctx.db)
+    resolved = await registry.resolve(ctx.db, ctx.user)
     messages = [
         ChatMessage(
             role="system",
@@ -743,7 +730,6 @@ _HANDLERS = {
     "read_file": _read_file,
     "write_file": _write_file,
     "create_folder": _create_folder,
-    "create_project": _create_project,
     "rename_node": _rename_node,
     "move_node": _move_node,
     "delete_node": _delete_node,

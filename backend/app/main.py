@@ -9,10 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import chat, files, health, providers
+from app.api import admin, auth, chat, files, health, providers
 from app.config import settings
+from app.db import session_scope
 from app.llm.schemas import NoProviderAvailable
 from app.logging_config import configure_logging, get_logger
+from app.services import users as user_service
 from app.services.nodes import NodeError
 from app.services.operations import OperationError
 from app.services.storage import storage
@@ -25,17 +27,27 @@ async def lifespan(app: FastAPI):
     configure_logging()
     storage.ensure()
     logger.info(
-        "Starting %s v%s | default provider=%s model=%s | workspace=%s",
+        "Starting %s v%s | provider=deepseek model=%s | workspace=%s",
         settings.app_name,
         __version__,
-        settings.llm_provider,
         settings.llm_model,
         settings.workspace_dir,
     )
     if settings.secret_key_is_insecure:
         logger.warning(
-            "APP_SECRET_KEY is insecure - provider keys saved from the UI are weakly encrypted"
+            "APP_SECRET_KEY is insecure - DeepSeek keys stored in the database are weakly encrypted"
         )
+    try:
+        async with session_scope() as db:
+            created = await user_service.ensure_admin(db)
+        if created is not None:
+            logger.warning(
+                "Bootstrap administrator '%s' created with the password from ADMIN_PASSWORD - "
+                "change it in the UI right after the first login",
+                created.username,
+            )
+    except Exception:  # noqa: BLE001 - the API must still start if the DB is late
+        logger.exception("Could not bootstrap the administrator account")
     yield
     from app.db import dispose_engine
     from app.llm.factory import registry
@@ -84,6 +96,11 @@ async def provider_error_handler(request: Request, exc: NoProviderAvailable) -> 
     )
 
 
+@app.exception_handler(user_service.UserError)
+async def user_error_handler(request: Request, exc: user_service.UserError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+
+
 @app.get("/api")
 async def api_root() -> dict:
     return {
@@ -91,10 +108,13 @@ async def api_root() -> dict:
         "version": __version__,
         "docs": "/api/docs",
         "websocket": "/api/ws/chat/{session_id}",
+        "auth": "/api/auth/login",
     }
 
 
 app.include_router(health.router)
+app.include_router(auth.router)
+app.include_router(admin.router)
 app.include_router(files.router)
 app.include_router(chat.router)
 app.include_router(providers.router)

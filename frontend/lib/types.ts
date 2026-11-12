@@ -4,6 +4,8 @@ export interface WorkNode {
   id: string;
   parent_id: string | null;
   project_id: string | null;
+  owner_id?: string | null;
+  owner?: string | null;
   name: string;
   kind: NodeKind;
   mime: string | null;
@@ -90,8 +92,9 @@ export interface SettingsResponse {
   max_upload_mb: number;
   default_provider: string;
   default_model: string;
-  ollama_base_url: string;
   auth_enabled: boolean;
+  user: UserInfo;
+  admin_password_is_default: boolean;
 }
 
 export interface SessionInfo {
@@ -179,3 +182,76 @@ export interface AgentEvent {
   type: string;
   [key: string]: unknown;
 }
+
+// ---------------------------------------------------------------------- auth
+export type UserRole = 'admin' | 'user';
+
+export interface UserStats {
+  projects: number;
+  files: number;
+  sessions: number;
+  chunks: number;
+}
+
+export interface UserInfo {
+  id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  is_admin: boolean;
+  is_active: boolean;
+  deepseek_configured: boolean;
+  deepseek_key_masked: string;
+  deepseek_model: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  stats?: UserStats | null;
+}
+
+export interface LoginResponse {
+  token: string;
+  expires_at: string;
+  user: UserInfo;
+}
+
+export interface AdminProject {
+  id: string;
+  name: string;
+  owner_id: string | null;
+  owner: string | null;
+  files: number;
+  chunks: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AdminOverview {
+  users: number;
+  active_users: number;
+  admins: number;
+  users_without_key: number;
+  projects: number;
+  files: number;
+  sessions: number;
+  chunks: number;
+}
+
+export interface UserCreatePayload {
+  username: string;
+  password: string;
+  display_name?: string;
+  role?: UserRole;
+  deepseek_api_key?: string | null;
+  deepseek_model?: string | null;
+}
+
+export interface UserUpdatePayload {
+  display_name?: string;
+  password?: string;
+  role?: UserRole;
+  is_active?: boolean;
+  deepseek_api_key?: string | null;
+  deepseek_model?: string | null;
+  clear_deepseek_key?: boolean;
+}
+

@@ -22,9 +22,14 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ app
     app_name: str = "Element Workspace"
     app_secret_key: str = "dev-insecure-secret-change-me"
-    app_user_token: str = ""
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:3000"
+
+    # ---------------------------------------------------------------- auth
+    # Bootstrap administrator, created on first start when no user exists yet.
+    admin_username: str = "admin"
+    admin_password: str = "admin"
+    session_ttl_hours: int = 24 * 14
 
     # ----------------------------------------------------------- persistence
     database_url: str = "postgresql+asyncpg://workspace:workspace@localhost:5432/workspace"
@@ -35,26 +40,19 @@ class Settings(BaseSettings):
     workspace_dir: Path = Path("/data/workspace")
 
     # ---------------------------------------------------------------- llm
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4o"
-    openai_api_key: str = ""
-    openai_base_url: str = ""
-    anthropic_api_key: str = ""
-    google_api_key: str = ""
+    # DeepSeek is the only chat provider. The global key is an optional
+    # fallback for accounts that were not issued an individual key.
+    llm_provider: str = "deepseek"
+    llm_model: str = "deepseek-chat"
     deepseek_api_key: str = ""
-    openrouter_api_key: str = ""
-    groq_api_key: str = ""
-    together_api_key: str = ""
-    xai_api_key: str = ""
-    ollama_base_url: str = "http://ollama:11434"
-    ollama_model: str = "llama3.2"
     llm_request_timeout: float = 180.0
     llm_max_retries: int = 2
     max_agent_steps: int = 8
 
     # ---------------------------------------------------------- embeddings
-    embedding_provider: str = "openai"
-    embedding_model: str = "text-embedding-3-small"
+    # DeepSeek has no embeddings API, so vectors are always computed locally.
+    embedding_provider: str = "local"
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     local_embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embedding_batch_size: int = 32
 
@@ -89,18 +87,9 @@ class Settings(BaseSettings):
     def temp_dir(self) -> Path:
         return Path(self.workspace_dir) / "tmp"
 
-    def provider_api_key(self, provider: str) -> str:
-        return {
-            "openai": self.openai_api_key,
-            "anthropic": self.anthropic_api_key,
-            "gemini": self.google_api_key,
-            "deepseek": self.deepseek_api_key,
-            "openrouter": self.openrouter_api_key,
-            "groq": self.groq_api_key,
-            "together": self.together_api_key,
-            "xai": self.xai_api_key,
-            "ollama": "ollama",
-        }.get(provider, "")
+    @property
+    def admin_password_is_default(self) -> bool:
+        return self.admin_password in {"", "admin", "change-me", "changeme"}
 
 
 @lru_cache

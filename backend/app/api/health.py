@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import __version__
 from app.config import settings
 from app.db import get_db
-from app.llm.factory import registry
+from app.llm.factory import PROVIDER_NAME, registry
 from app.llm.local_embeddings import local_embeddings_available
 from app.logging_config import get_logger
 from app.services.vectorstore import vector_store
@@ -42,47 +42,34 @@ async def _check_redis() -> tuple[bool, str]:
 
 @router.get("/health")
 async def health(db: AsyncSession = Depends(get_db)) -> dict:
+    """Public readiness probe (used by docker healthchecks and the UI banner).
+
+    Per-account key state is *not* exposed here - it comes from ``/api/providers``
+    for authenticated users.
+    """
     db_ok, db_message = await _check_database(db)
     qdrant_ok, qdrant_message = await vector_store.health()
     redis_ok, redis_message = await _check_redis()
 
-    providers: list[dict] = []
-    configured: list[str] = []
-    embedding_configured: list[str] = []
-    if db_ok:
-        try:
-            views = await registry.list_providers(db)
-            providers = [view.to_dict() for view in views]
-            configured = [view.name for view in views if view.configured and not view.local]
-            embedding_configured = [view.name for view in views if view.configured and view.supports_embeddings]
-            if local_embeddings_available():
-                embedding_configured.append("local")
-            if any(view.local and view.configured for view in views):
-                configured.append("ollama")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Provider introspection failed: %s", exc)
+    system_key = bool(settings.deepseek_api_key)
+    embedding_configured = ["local"] if local_embeddings_available() else []
+    view = await registry.provider_view(db, None)
 
     warnings: list[str] = []
     banner: str | None = None
     if settings.secret_key_is_insecure:
         warnings.append(
-            "APP_SECRET_KEY is unset/insecure: saved provider keys are weakly encrypted. "
+            "APP_SECRET_KEY is unset/insecure: stored DeepSeek keys are weakly encrypted. "
             "Set a long random value in .env."
         )
-    if not configured:
-        banner = (
-            "No LLM provider is configured. Add an API key in Settings (⚙) or start the local "
-            "Ollama profile: docker compose --profile local-llm up -d && docker compose exec ollama ollama pull llama3.2"
-        )
-    elif "ollama" in configured and not [item for item in configured if item != "ollama"]:
-        banner = (
-            "Running in local mode with Ollama. Pull a model first: "
-            "docker compose exec ollama ollama pull llama3.2"
+    if settings.admin_password_is_default:
+        warnings.append(
+            "The bootstrap administrator still uses the default password - change it after login."
         )
     if not embedding_configured:
         warnings.append(
-            "No embedding provider available - document search (RAG) is disabled until an "
-            "OpenAI/Gemini key is configured or EMBEDDING_PROVIDER=local."
+            "Local embeddings are unavailable - document search (RAG) is disabled. "
+            "Install sentence-transformers (INSTALL_LOCAL_EMBEDDINGS=1)."
         )
     if not qdrant_ok:
         warnings.append(f"Vector database unavailable: {qdrant_message}")
@@ -92,7 +79,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
     status = "ok"
     if not db_ok:
         status = "error"
-    elif not configured or not qdrant_ok or warnings:
+    elif warnings or not qdrant_ok:
         status = "degraded"
 
     return {
@@ -104,11 +91,12 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
             "redis": {"ok": redis_ok, "message": redis_message},
         },
         "providers": {
-            "configured": configured,
+            "configured": [PROVIDER_NAME] if system_key else [],
             "embedding_configured": embedding_configured,
-            "default_provider": settings.llm_provider,
+            "default_provider": PROVIDER_NAME,
             "default_model": settings.llm_model,
-            "details": providers,
+            "details": [view.to_dict()],
+            "auth": "required",
         },
         "banner": banner,
         "warnings": warnings,

@@ -10,17 +10,21 @@ AI read, search **and actually edit** them — with citations, streaming answers
   recorded as a reversible operation.
 * **RAG with citations** — every document is parsed (Excel cells, Word, PDF, Tesseract OCR for
   images), chunked, embedded and stored in Qdrant. Answers cite `[1] file.pdf (page:3)`.
-* **Multi-provider LLM layer** — OpenAI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Ollama and
-  any OpenAI-compatible endpoint (Groq, Together, xAI) behind one `LLMProvider` interface, with
-  automatic fallback and encrypted keys in PostgreSQL.
+* **DeepSeek-only AI** — the chat layer speaks to exactly one backend (DeepSeek), through the OpenAI
+  dialect, with tool calling and streaming. Embeddings run locally (sentence-transformers), so no
+  extra LLM/embedding vendor is involved.
+* **Accounts, roles and isolation** — an administrator creates users, assigns each one a DeepSeek
+  key and can see every project. Users only ever see their own projects; a chat is bound to a single
+  project, so retrieval and the AI tools can never reach outside it.
 * **Viewers** — Excel (SheetJS, per-sheet tabs), Word (mammoth), PDF (PDF.js), images + OCR,
   Markdown/code/JSON with syntax highlighting.
 * **UI** — three panes: file tree · chat · viewer (the chat/viewer splitter is draggable and the
   width is remembered), dark/light theme and a **RU/EN interface** (Russian by default, switch in
   the top bar or on the settings page).
 
-Everything runs with `docker compose up`; a single API key in `.env` is enough, and without any key
-the app still starts (degraded banner + optional local Ollama profile).
+Everything runs with `docker compose up`. On the first start a bootstrap administrator is created
+from `ADMIN_USERNAME` / `ADMIN_PASSWORD`; sign in, open **Admin**, create the accounts and paste
+their DeepSeek keys.
 
 ---
 
@@ -63,13 +67,11 @@ encrypted with Fernet (key derived from `APP_SECRET_KEY`) and only ever returned
                                                              │ worker         │
                                                              │ Celery indexer │
                                                              └────────────────┘
-        optional profile local-llm:  ┌──────────────────────┐
-                                     │ ollama (OpenAI API)  │
-                                     └──────────────────────┘
+        optional profile local-llm:  (removed - DeepSeek only, local embeddings)
 ```
 
-Volumes: `postgres_data`, `qdrant_data`, `redis_data`, `workspace_data` (blobs + local embedding
-models cache), `ollama_data`.
+Volumes: `postgres_data`, `qdrant_data`, `redis_data`, `workspace_data` (blobs + the local
+sentence-transformers model cache).
 
 > **Naming:** the product is **Element Workspace**. The Compose project is intentionally still
 > `ai-file-workspace` (see `name:` in `docker-compose.yml`), so existing volumes keep their names
@@ -84,35 +86,44 @@ git clone <this repo> element-workspace
 cd element-workspace
 
 cp .env.example .env
-# put ONE key in .env, e.g.
-#   OPENAI_API_KEY=sk-...
-# generate a real encryption secret:
-python -c "import secrets;print(secrets.token_urlsafe(48))"   # → APP_SECRET_KEY
+# generate a real encryption secret (protects the DeepSeek keys in the DB):
+python -c "import secrets;print(secrets.token_urlsafe(48))"     # → APP_SECRET_KEY
+# set the bootstrap administrator:
+#   ADMIN_USERNAME=admin
+#   ADMIN_PASSWORD=<a strong password>
 
 docker compose up -d --build      # or: make up
 ```
 
-Open **http://localhost:3000**, press **+ Project**, drop a folder or files into the tree.
+Open **http://localhost:3000** → sign in as the bootstrap administrator → **Admin** → create a user,
+paste their **DeepSeek API key** → the user signs in, presses **+ Project** and drops files in.
 
+* The bootstrap account is created **only once**, on a database without users. Later changes are made
+  in the UI (`/admin`), so `ADMIN_PASSWORD` can be removed from `.env` afterwards.
+* A chat can only be started inside a project: select a project in the tree and the assistant receives
+  that project's tree and its RAG context - nothing else.
 * Health/readiness (and the UI banner) come from `GET /api/health`.
 * `docker compose ps` should show `postgres`, `qdrant` and `redis` as *healthy*; `backend` health
   turns green after migrations complete.
 * Direct backend for debugging: `http://localhost:8001/api/docs` (OpenAPI).
 
-### Local-only mode (no cloud key)
+### Roles
 
-```bash
-docker compose --profile local-llm up -d
-docker compose exec ollama ollama pull llama3.2
-# .env
-LLM_PROVIDER=ollama
-LLM_MODEL=llama3.2
-EMBEDDING_PROVIDER=local          # sentence-transformers, CPU, downloaded on first use
-```
+| role | can do |
+| --- | --- |
+| `admin` | everything: create/disable/delete users, assign DeepSeek keys and models, browse every project of every user (`/admin` → *Open*), use the workspace |
+| `user` | own projects and own chats only; sees the DeepSeek key status (masked) but cannot change it |
 
-The Ollama container exposes an OpenAI-compatible API on `http://ollama:11434/v1`, so the same
-`CompatibleProvider` code path is used. Without any provider the UI shows a clear banner and the
-health endpoint reports `degraded` instead of failing.
+Sessions are bearer tokens (only the SHA-256 digest is stored in `auth_tokens`, TTL
+`SESSION_TTL_HOURS`, default 14 days); the browser keeps the token in `localStorage` and sends
+`Authorization: Bearer <token>`. File previews use `?token=` because `<img>`/`<iframe>` cannot send
+headers.
+
+### Embeddings
+
+DeepSeek has no embeddings endpoint, so vectors are always produced **locally** with
+`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (CPU, downloaded on first use into the
+`workspace_data` volume). The first answer that needs document search therefore warms up the model.
 
 ### Make targets
 
@@ -121,11 +132,11 @@ health endpoint reports `degraded` instead of failing.
 | `make up` | build + start everything, opens `http://localhost:3000` |
 | `make logs` | tail logs from all containers |
 | `make down` | stop the stack, keep volumes |
-| `make reset` | stop + delete **all** volumes (workspace, DB, vectors) |
-| `make pull-model` | start the `local-llm` profile and pull `OLLAMA_MODEL` |
+| `make reset` | stop and delete **all** volumes (workspace, DB, vectors) |
 | `make backend-shell` / `make worker-shell` / `make psql` | debug shells |
 
 ### Interface language and layout
+
 
 The UI ships in **Russian (default)** and **English**: toggle with the `RU/EN` button in the top bar
 or pick a language under `/settings → Interface language`. The choice is stored in `localStorage`
@@ -141,7 +152,7 @@ resize the chat (320 px … width minus 320 px for the viewer); double-click the
 
 ```
 .
-├── docker-compose.yml          # 7 services + optional ollama profile
+├── docker-compose.yml          # 7 services (no optional profiles any more)
 ├── .env.example                # every setting documented
 ├── Makefile                    # up / logs / reset / shells
 ├── nginx/                      # single entry point (REST + WS + static)
@@ -150,25 +161,25 @@ resize the chat (320 px … width minus 320 px for the viewer); double-click the
 │   ├── requirements.txt        # pinned runtime deps
 │   ├── requirements-local.txt  # sentence-transformers (optional, build arg)
 │   ├── alembic.ini
-│   ├── alembic/                # async env + initial schema revision
+│   ├── alembic/                # async env + schema revisions (0001, 0002)
 │   └── app/
-│       ├── main.py             # FastAPI app, CORS, error handlers
+│       ├── main.py             # FastAPI app, CORS, error handlers, admin bootstrap
 │       ├── entrypoint.py       # migrations → uvicorn
 │       ├── config.py           # pydantic-settings (.env)
 │       ├── db.py               # async engine / session scopes
-│       ├── models.py           # nodes, versions, chats, operations, keys, logs
+│       ├── deps.py             # bearer-token auth + admin guard
+│       ├── models.py           # users, tokens, nodes, versions, chats, logs
 │       ├── schemas.py          # API models
-│       ├── security.py         # Fernet encryption + masking
+│       ├── security.py         # password hashing, tokens, Fernet, masking
+│       ├── api/                # auth, admin, files, chat, providers, health
 │       ├── llm/
 │       │   ├── base.py         # LLMProvider protocol + capabilities
 │       │   ├── schemas.py      # ChatMessage / ToolCall / stream events
-│       │   ├── catalog.py      # provider metadata, fallback order
-│       │   ├── openai_provider.py
-│       │   ├── anthropic_provider.py
-│       │   ├── gemini_provider.py
-│       │   ├── compatible_provider.py  # DeepSeek/OpenRouter/Ollama/Groq/…
+│       │   ├── catalog.py      # DeepSeek metadata, model list
+│       │   ├── openai_provider.py      # OpenAI SDK client (also DeepSeek's dialect)
+│       │   ├── compatible_provider.py  # DeepSeek wrapper
 │       │   ├── local_embeddings.py
-│       │   └── factory.py      # credentials, selection, fallback
+│       │   └── factory.py      # per-user keys, model choice, local embeddings
 │       ├── services/
 │       │   ├── storage.py      # blob store + decoding
 │       │   ├── parsing.py      # xlsx/xls/csv, docx/doc, pdf, OCR, text
@@ -180,144 +191,78 @@ resize the chat (320 px … width minus 320 px for the viewer); double-click the
 │       │   ├── embeddings.py   # batching + retries
 │       │   ├── indexer.py      # parse → chunk → embed → upsert
 │       │   ├── rag.py          # retrieval + citation objects
-│       │   ├── tools.py        # 14 AI tools + undo records
-│       │   ├── agent.py        # streaming + tool loop + fallback
+│       │   ├── tools.py        # 13 AI tools + undo records (project-scoped)
+│       │   ├── agent.py        # streaming + tool loop, one project of context
 │       │   ├── operations.py   # rollback of AI actions
+│       │   ├── users.py        # accounts, tokens, per-user DeepSeek keys
 │       │   └── chat_service.py # sessions/messages/LLM logs
 │       ├── api/
-│       │   └── health.py, files.py, chat.py, providers.py
+│       │   └── auth.py, admin.py, health.py, files.py, chat.py, providers.py
 │       └── worker/
 │           ├── celery_app.py
 │           └── tasks.py
 └── frontend/
     ├── Dockerfile              # standalone Next.js runtime
-    ├── app/                    # layout, workspace page, settings page
+    ├── app/                    # layout, workspace page, login, admin, settings
     ├── components/             # tree, chat, viewer, viewers/, settings, splitter
     └── lib/                    # typed API client, chat WebSocket hook, i18n (ru/en)
 ```
 
 ---
 
-## Connecting cloud providers
+## DeepSeek, accounts and project isolation
 
-Keys can be set **either** in `.env` **or** on the settings page (`/settings`). Values saved in the
-UI win and are stored encrypted; the API only returns `sk-t…6789` style masks. After changing a
-credential the provider client cache is invalidated immediately.
+DeepSeek is the **only** chat backend. The client uses the OpenAI-compatible dialect
+(`https://api.deepseek.com`), tool calling and streaming; there is no provider fallback chain any
+more (`registry.candidates()` returns at most one entry).
 
-### OpenAI (native SDK)
+### Where the API key comes from
 
-```env
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o
-OPENAI_API_KEY=sk-...
-# OPENAI_BASE_URL=            # optional: Azure/proxy/self-hosted gateway
-EMBEDDING_PROVIDER=openai
-EMBEDDING_MODEL=text-embedding-3-small
+1. the key an administrator assigned to the signed-in user (`users.deepseek_api_key_enc`, encrypted
+   with Fernet derived from `APP_SECRET_KEY`), or
+2. the deployment-wide `DEEPSEEK_API_KEY` from `.env`, used as a fallback for accounts without a
+   personal key.
+
+Without either, `/api/providers` reports `chat_available: false`, the UI shows a banner and chat
+requests fail with HTTP 503 `no_provider` — the rest of the workspace keeps working.
+
+### Models
+
+| model | use |
+| --- | --- |
+| `deepseek-chat` (default) | general work, tool calling |
+| `deepseek-reasoner` | longer reasoning; slower and more expensive |
+
+The administrator picks the model per user in `/admin`; `LLM_MODEL` in `.env` is the global default.
+
+### Chat context = one project
+
+* `POST /api/sessions` requires `project_id`; there is no workspace-wide chat any more.
+* `run_agent()` resolves the session's project and passes `project_id` into retrieval
+  (`rag.retrieve` refuses to run without it) and into every tool call.
+* Tools can only address nodes whose `project_id` matches the chat's project (`_resolve_node`), and
+  attachment ids from another project are ignored with a warning.
+* `list_workspace` always lists the current project, `search_documents` always filters by it.
+* The file tree, uploads, renames, moves, deletes, previews and downloads are all checked against the
+  node's `owner_id`; a foreign node answers **404** (not 403) so its existence is not leaked.
+* Administrators bypass the owner check and can browse any account (`/api/tree?owner_id=…`,
+  `/admin` → *Open*).
+
+### Key endpoints
+
 ```
+POST /api/auth/login              {"username","password"} → {"token","expires_at","user"}
+POST /api/auth/logout             revokes the current token
+GET  /api/auth/me                 current account
+POST /api/auth/password           {"current_password","new_password"}
 
-### Anthropic
-
-```env
-LLM_PROVIDER=anthropic
-LLM_MODEL=claude-sonnet-4-20250514
-ANTHROPIC_API_KEY=sk-ant-...
-EMBEDDING_PROVIDER=local      # Anthropic has no embeddings API
+GET    /api/admin/users           accounts + per-user counters
+POST   /api/admin/users           create (username, password, role, deepseek_api_key, deepseek_model)
+PATCH  /api/admin/users/{id}      rename, reset password, change role/state, set or clear the key
+DELETE /api/admin/users/{id}      delete the account with its projects, chats and vectors
+GET    /api/admin/projects        every project + owner + file/chunk counts
+GET    /api/admin/overview        counters for the dashboard
 ```
-
-Tool-use blocks are mapped both ways (`tool_use` → `ToolCall`, `tool_result` → tool message), and
-images become `image` blocks.
-
-### Google Gemini
-
-```env
-LLM_PROVIDER=gemini
-LLM_MODEL=gemini-2.0-flash
-GOOGLE_API_KEY=AIza...
-EMBEDDING_PROVIDER=gemini
-EMBEDDING_MODEL=text-embedding-004
-```
-
-Function declarations are sent with `automatic_function_calling` disabled so the agent keeps control
-of the loop; tool JSON-Schemas are sanitised to the subset Gemini accepts.
-
-### DeepSeek
-
-```env
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-flash      # or deepseek-v4-pro / deepseek-chat (depends on your account)
-DEEPSEEK_API_KEY=sk-...
-EMBEDDING_PROVIDER=local
-```
-
-Base URL `https://api.deepseek.com` (OpenAI-compatible). The chat model selector loads the live
-model list from `/v1/models`, so newly released DeepSeek models appear automatically.
-
-### OpenRouter
-
-```env
-LLM_PROVIDER=openrouter
-LLM_MODEL=anthropic/claude-3.5-sonnet
-OPENROUTER_API_KEY=sk-or-...
-EMBEDDING_PROVIDER=local
-```
-
-Base URL `https://openrouter.ai/api/v1`; requests carry `HTTP-Referer`/`X-Title` headers.
-
-### Ollama (local fallback)
-
-```env
-OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_MODEL=llama3.2
-LLM_PROVIDER=ollama
-EMBEDDING_PROVIDER=local
-```
-
-`docker compose --profile local-llm up -d` starts the container; without the profile the URL is
-unreachable and Ollama is simply skipped in the fallback chain.
-
-### Groq / Together / xAI
-
-```env
-GROQ_API_KEY=gsk_...          # provider groq,      https://api.groq.com/openai/v1
-TOGETHER_API_KEY=...          # provider together,  https://api.together.xyz/v1
-XAI_API_KEY=xai-...           # provider xai,       https://api.x.ai/v1
-```
-
-Set `LLM_PROVIDER` to the matching name or pick it in the chat model selector. Catalogues and base
-URLs live in `backend/app/llm/catalog.py`.
-
-### Which provider is used?
-
-1. Provider/model chosen explicitly in the chat selector (sent with the request).
-2. Defaults saved on the settings page (DB), else `LLM_PROVIDER` / `LLM_MODEL` from `.env`.
-3. If that provider has no key, or fails with 401/429/5xx **before the first token**, the agent walks
-   `openai → anthropic → gemini → deepseek → openrouter → groq → together → xai → ollama` and emits a
-   `provider_fallback` event that the UI shows as a notice.
-4. Nothing usable → `/api/health` reports `degraded`, `/api/providers` returns
-   `chat_available=false`, and the chat shows a banner linking to the settings page.
-
-Retries (`LLM_MAX_RETRIES`, default 2) only apply until the first token is streamed; afterwards an
-error is surfaced instead of silently restarting the answer.
-
-### Embeddings
-
-`EMBEDDING_PROVIDER` is independent from the chat provider:
-
-| value | backend | notes |
-| --- | --- | --- |
-| `openai` | `text-embedding-3-small` / `-large` | needs `OPENAI_API_KEY` |
-| `gemini` | `text-embedding-004`, `gemini-embedding-001` | needs `GOOGLE_API_KEY` |
-| `ollama` | `nomic-embed-text`, `mxbai-embed-large` | local profile + pulled model |
-| `local` | sentence-transformers (CPU) | `paraphrase-multilingual-MiniLM-L12-v2`, 384 dims |
-
-If the configured embedding provider is unavailable the backend falls back
-`configured → openai → gemini → local`. When nothing is available RAG is disabled (health warning,
-`/api/rag/search` returns an error) while chat and tools keep working. Changing embedding
-dimensions recreates the Qdrant collection automatically — re-index documents afterwards
-(right-click a project → **Reindex**).
-
-
----
 
 ## Walkthroughs
 
@@ -382,38 +327,45 @@ REST under `/api` (OpenAPI at `/api/docs`), JSON everywhere, NDJSON/WebSocket fo
 
 | method | path | purpose |
 | --- | --- | --- |
-| GET | `/api/health` | db/qdrant/redis checks, provider readiness, UI banner |
-| GET | `/api/tree?project_id=` | full tree or a single project |
+| POST | `/api/auth/login` · `/api/auth/logout` | sign in (returns a bearer token) / revoke it |
+| GET | `/api/auth/me` · POST `/api/auth/password` | current account / change own password |
+| GET | `/api/admin/users` · POST `/api/admin/users` | list accounts with counters / create one |
+| PATCH | `/api/admin/users/{id}` · DELETE `/api/admin/users/{id}` | edit (role, state, password, DeepSeek key) / delete with all data |
+| GET | `/api/admin/projects` · `/api/admin/overview` | all projects with owners / dashboard counters |
+| GET | `/api/health` | db/qdrant/redis checks, system readiness, UI banner |
+| GET | `/api/tree?project_id=&owner_id=` | own tree (`owner_id` is admin-only) |
 | POST | `/api/projects`, `/api/folders` | create project / folder |
 | POST | `/api/upload` | multipart `files[]` + `paths[]` (folder structure) |
 | POST | `/api/nodes/{id}/extract` | upload ZIP and extract into that folder |
 | PATCH | `/api/nodes/{id}` | rename and/or move (`name`, `parent_id`) |
 | DELETE | `/api/nodes/{id}` | delete node + descendants |
-| GET | `/api/nodes/{id}/download` | file stream or ZIP for folders |
-| GET | `/api/nodes/{id}/content` | inline bytes (viewers) with ETag |
+| GET | `/api/nodes/{id}/download` | file stream or ZIP for folders (`?token=` allowed) |
+| GET | `/api/nodes/{id}/content` | inline bytes (viewers) with ETag (`?token=` allowed) |
 | GET | `/api/nodes/{id}/text` | extracted text/segments/meta (viewers + OCR) |
 | GET | `/api/nodes/{id}/versions` · POST `…/versions/{version_id}/revert` | history |
 | POST | `/api/nodes/{id}/reindex` | queue indexing for a file/folder/project |
-| GET | `/api/index/status` | counts by status, chunks, vectors |
-| GET/POST | `/api/sessions` | list / create chat |
+| GET | `/api/index/status` | counts by status, chunks, vectors (own files) |
+| GET/POST | `/api/sessions?project_id=` | list / create chats (creation requires `project_id`) |
 | GET | `/api/sessions/{id}/messages` · DELETE `/api/sessions/{id}` | history / delete |
 | POST | `/api/sessions/{id}/message` | NDJSON stream (fallback when WS is blocked) |
 | POST | `/api/operations/{id}/revert` | undo an AI action |
-| POST | `/api/rag/search` | retrieval only (citations, no LLM) |
-| GET | `/api/providers` | catalogue + configured flags + defaults |
-| POST | `/api/providers/{name}/test` | real connection check (✅/❌ + latency) |
-| GET | `/api/providers/{name}/models` | dynamic model list (Ollama/OpenAI) |
-| POST | `/api/embeddings/test` | embed a probe string, returns dimension |
-| GET | `/api/settings` · PUT `/api/settings/credentials` · PUT `/api/settings/preferences` | encrypted keys + defaults |
+| POST | `/api/rag/search` | retrieval only, `project_id` mandatory |
+| GET | `/api/providers` · POST `/api/providers/test` | DeepSeek status for the current account / connection check |
+| GET | `/api/providers/models` | DeepSeek model list |
+| POST | `/api/embeddings/test` | embed a probe string locally, returns dimension |
+| GET | `/api/settings` · PUT `/api/settings/preferences` | account + DeepSeek status / global model (admin) |
+
+Every route except `/api/health`, `/api/auth/login` and the OpenAPI docs requires
+`Authorization: Bearer <token>`.
 
 ### WebSocket protocol
 
-`ws://<host>/api/ws/chat/{session_id}` (proxied by nginx, 1 h read timeout).
+`ws://<host>/api/ws/chat/{session_id}?token=<bearer-token>` (proxied by nginx, 1 h read timeout).
 
 Client → server:
 
 ```json
-{"type":"message","content":"Add a Q4 sheet to budget.xlsx","provider":"openai","model":"gpt-4o","attachments":["<node-id>"],"use_rag":true}
+{"type":"message","content":"Add a Q4 sheet to budget.xlsx","model":"deepseek-chat","attachments":["<node-id>"],"use_rag":true}
 {"type":"ping"}
 ```
 
@@ -427,19 +379,25 @@ Each assistant step is persisted, so reloading a chat restores tool cards and ci
 
 ## Security notes
 
-* **Key storage** — provider keys saved from the UI are encrypted with Fernet
+* **Key storage** — every account has its own DeepSeek key, encrypted with Fernet
   (`SHA-256(APP_SECRET_KEY)` → urlsafe base64) before being written to PostgreSQL; the API returns
-  masks only. `APP_SECRET_KEY` is validated at startup and flagged in the UI when insecure.
+  `sk-a…9f2c` style masks only, and the key never appears in logs. `APP_SECRET_KEY` is validated at
+  startup and flagged in the UI when insecure (changing it invalidates stored keys).
 * **Path handling** — user names are sanitised (`<>:"/\|?*`, control chars, `..`); blobs are stored
   under random 32-hex keys, so no user input ever reaches a filesystem path. ZIP extraction rejects
   absolute paths and `..` segments.
 * **Uploads** — extension allow-list, per-file size limit (`MAX_UPLOAD_MB`), archive entry/size
   limits, and magic-byte checks for images/PDF/ZIP/OOXML to catch MIME spoofing.
-* **Auth** — single-user stub: open by default, optional `APP_USER_TOKEN` bearer token for REST and
-  `?token=` for the WebSocket. Put the stack behind your own reverse proxy / SSO for multi-user use.
+* **Auth** — mandatory for every route except `/api/health` and `/api/auth/login`. Passwords are
+  PBKDF2-HMAC-SHA256 (260k iterations, per-password salt); bearer tokens are 36 random bytes and only
+  their SHA-256 digest is stored. Tokens expire after `SESSION_TTL_HOURS`, and changing a password
+  revokes every other session.
+* **Isolation** — a node's `owner_id` and a chat's `owner_id`/`project_id` drive every query; foreign
+  ids answer **404** so existence is not leaked, and the agent's tool layer refuses nodes outside the
+  chat's project.
 * **SQL** — all queries go through SQLAlchemy Core/ORM with bound parameters.
-* **Logging** — every provider call is recorded in `llm_logs` (provider, model, tokens, duration,
-  status, error) without storing prompt contents.
+* **Logging** — every LLM call is recorded in `llm_logs` (provider, model, tokens, duration, status,
+  error) without storing prompt contents.
 
 ---
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 
+import { useAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import type { HealthResponse } from '@/lib/types';
 
@@ -11,6 +12,8 @@ interface TopBarProps {
   activeProvider: string | null;
   activeModel: string | null;
   indexSummary?: string;
+  projectName?: string | null;
+  viewingOwner?: string | null;
 }
 
 export function TopBar({
@@ -19,8 +22,11 @@ export function TopBar({
   activeProvider,
   activeModel,
   indexSummary,
+  projectName,
+  viewingOwner,
 }: TopBarProps) {
   const { locale, setLocale, t } = useI18n();
+  const { user, logout } = useAuth();
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
@@ -84,6 +90,16 @@ export function TopBar({
         <span className="chip" title={t('app.activeProvider')}>
           ⚡ {providerLabel}
         </span>
+        {projectName ? (
+          <span className="chip" title={t('app.activeProjectTip')}>
+            📁 {projectName}
+          </span>
+        ) : null}
+        {viewingOwner ? (
+          <a className="chip text-amber-600 dark:text-amber-400" href="/" title={t('app.viewingOtherUser')}>
+            👁 {t('app.viewingOtherUser')}
+          </a>
+        ) : null}
         {indexSummary ? <span className="chip">🗂 {indexSummary}</span> : null}
         {health?.providers.embedding_configured.length === 0 ? (
           <span className="chip text-amber-600 dark:text-amber-400" title="RAG disabled">
@@ -93,6 +109,11 @@ export function TopBar({
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
+        {user?.is_admin ? (
+          <a className="btn btn-ghost" href="/admin" title={t('admin.title')}>
+            {t('app.admin')}
+          </a>
+        ) : null}
         <a className="btn btn-ghost" href="/settings" title={t('app.settings')}>
           {t('app.settings')}
         </a>
@@ -107,6 +128,16 @@ export function TopBar({
         <button type="button" className="btn btn-ghost" onClick={toggleTheme} title={t('app.theme')}>
           {dark ? '☀' : '🌙'}
         </button>
+        {user ? (
+          <div className="ml-1 flex items-center gap-1.5 border-l pl-2">
+            <span className="chip" title={user.username}>
+              {user.is_admin ? '👑' : '👤'} {user.display_name || user.username}
+            </span>
+            <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
+              {t('app.logout')}
+            </button>
+          </div>
+        ) : null}
       </div>
     </header>
   );

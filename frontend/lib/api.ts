@@ -1,19 +1,53 @@
 import type {
+  AdminOverview,
+  AdminProject,
   AgentEvent,
   Citation,
   HealthResponse,
   IndexStatus,
+  LoginResponse,
   Preferences,
   ProvidersResponse,
   SessionInfo,
   SettingsResponse,
   TextPreview,
   UploadResult,
+  UserCreatePayload,
+  UserInfo,
+  UserUpdatePayload,
   VersionInfo,
   WorkNode,
 } from './types';
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
+
+const TOKEN_KEY = 'afw-token';
+
+let unauthorizedHandler: (() => void) | null = null;
+
+export function getToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage may be blocked */
+  }
+}
+
+/** Registered by the auth provider: called when the API answers 401. */
+export function onUnauthorized(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -25,11 +59,22 @@ export class ApiError extends Error {
   }
 }
 
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function tokenQuery(): string {
+  const token = getToken();
+  return token ? `?token=${encodeURIComponent(token)}` : '';
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isForm = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
+      ...authHeaders(),
       ...(isForm ? {} : { 'Content-Type': 'application/json' }),
       ...(init?.headers || {}),
     },
@@ -44,6 +89,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       }
     } catch {
       /* non-json error body */
+    }
+    if (response.status === 401) {
+      setToken(null);
+      unauthorizedHandler?.();
     }
     throw new ApiError(detail, response.status);
   }
@@ -66,7 +115,41 @@ export interface UploadEntry {
 export const api = {
   health: () => request<HealthResponse>('/api/health'),
 
-  tree: () => request<WorkNode[]>('/api/tree'),
+  // --------------------------------------------------------------- auth
+  login: (username: string, password: string) =>
+    request<LoginResponse>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  me: () => request<UserInfo>('/api/auth/me'),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/api/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+
+  // -------------------------------------------------------------- admin
+  adminUsers: () => request<UserInfo[]>('/api/admin/users'),
+  adminCreateUser: (payload: UserCreatePayload) =>
+    request<UserInfo>('/api/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
+  adminUpdateUser: (userId: string, payload: UserUpdatePayload) =>
+    request<UserInfo>(`/api/admin/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  adminDeleteUser: (userId: string) =>
+    request<{ deleted: boolean; username: string }>(`/api/admin/users/${userId}`, {
+      method: 'DELETE',
+    }),
+  adminProjects: (ownerId?: string | null) =>
+    request<AdminProject[]>(
+      `/api/admin/projects${ownerId ? `?owner_id=${encodeURIComponent(ownerId)}` : ''}`,
+    ),
+  adminOverview: () => request<AdminOverview>('/api/admin/overview'),
+
+  tree: (ownerId?: string | null) =>
+    request<WorkNode[]>(`/api/tree${ownerId ? `?owner_id=${encodeURIComponent(ownerId)}` : ''}`),
   createProject: (name: string) =>
     request<WorkNode>('/api/projects', { method: 'POST', body: JSON.stringify({ name }) }),
   createFolder: (parentId: string, name: string) =>
@@ -101,16 +184,25 @@ export const api = {
     });
   },
 
-  downloadUrl: (nodeId: string) => `${API_BASE}/api/nodes/${nodeId}/download`,
-  contentUrl: (nodeId: string, download = false) =>
-    `${API_BASE}/api/nodes/${nodeId}/content${download ? '?download=true' : ''}`,
+  downloadUrl: (nodeId: string) => `${API_BASE}/api/nodes/${nodeId}/download${tokenQuery()}`,
+  contentUrl: (nodeId: string, download = false) => {
+    const params = new URLSearchParams();
+    if (download) params.set('download', 'true');
+    const token = getToken();
+    if (token) params.set('token', token);
+    const query = params.toString();
+    return `${API_BASE}/api/nodes/${nodeId}/content${query ? `?${query}` : ''}`;
+  },
   text: (nodeId: string) => request<TextPreview>(`/api/nodes/${nodeId}/text`),
   versions: (nodeId: string) => request<VersionInfo[]>(`/api/nodes/${nodeId}/versions`),
   revertVersion: (nodeId: string, versionId: string) =>
     request<WorkNode>(`/api/nodes/${nodeId}/versions/${versionId}/revert`, { method: 'POST' }),
 
-  sessions: () => request<SessionInfo[]>('/api/sessions'),
-  createSession: (payload: { title?: string; project_id?: string | null } = {}) =>
+  sessions: (projectId?: string | null) =>
+    request<SessionInfo[]>(
+      `/api/sessions${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`,
+    ),
+  createSession: (payload: { title?: string; project_id: string }) =>
     request<SessionInfo>('/api/sessions', { method: 'POST', body: JSON.stringify(payload) }),
   sessionMessages: (sessionId: string) =>
     request<
@@ -132,17 +224,6 @@ export const api = {
 
   providers: () => request<ProvidersResponse>('/api/providers'),
   settings: () => request<SettingsResponse>('/api/settings'),
-  saveCredential: (payload: {
-    provider: string;
-    api_key?: string | null;
-    base_url?: string | null;
-    default_model?: string | null;
-    enabled?: boolean | null;
-  }) =>
-    request<{ saved: boolean }>('/api/settings/credentials', {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    }),
   savePreferences: (payload: Partial<Preferences>) =>
     request<{ preferences: Preferences; reindex_required?: boolean }>(
       '/api/settings/preferences',
@@ -209,7 +290,7 @@ export async function streamMessageRest(
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/api/sessions/${sessionId}/message`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(payload),
     signal,
   });
@@ -256,6 +337,8 @@ export function websocketUrl(sessionId: string): string {
   const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin : '');
   const url = new URL(`/api/ws/chat/${sessionId}`, base || 'http://localhost:3000');
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const token = getToken();
+  if (token) url.searchParams.set('token', token);
   return url.toString();
 }
 

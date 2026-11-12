@@ -19,6 +19,8 @@ interface ChatPanelProps {
   onAttachSelected: () => void;
   onOpenNode: (id: string) => void;
   onSettings: () => void;
+  /** Name of the project the chat is scoped to; null disables the composer. */
+  projectLabel: string | null;
 }
 
 export function ChatPanel({
@@ -29,6 +31,7 @@ export function ChatPanel({
   onAttachSelected,
   onOpenNode,
   onSettings,
+  projectLabel,
 }: ChatPanelProps) {
   const { t } = useI18n();
   const [text, setText] = useState('');
@@ -380,15 +383,16 @@ export function ChatPanel({
             ref={textareaRef}
             className="input min-h-[54px] max-h-40 resize-y py-2 text-sm"
             rows={2}
-            placeholder={t('chat.placeholder')}
+            placeholder={projectLabel ? t('chat.placeholder') : t('chat.selectProjectFirst')}
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={onKeyDown}
+            disabled={!projectLabel}
           />
           <button
             type="button"
             className="btn btn-primary h-[54px] px-3"
-            disabled={chat.streaming || !text.trim() || noProvider}
+            disabled={chat.streaming || !text.trim() || noProvider || !projectLabel}
             onClick={() => void submit()}
           >
             {chat.streaming ? '…' : t('chat.send')}

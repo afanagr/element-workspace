@@ -22,7 +22,9 @@ from app.llm.schemas import (
     ToolCallEvent,
 )
 from app.logging_config import get_logger
+from app.models import User
 from app.services import chat_service
+from app.services import nodes as node_service
 from app.services.nodes import NodeError, build_tree, get_node, node_path
 from app.services.parsing import parse_document
 from app.services.rag import expand_node_ids, retrieve
@@ -31,10 +33,13 @@ from app.services.tools import ToolContext, execute_tool, tool_specs
 
 logger = get_logger(__name__)
 
-SYSTEM_PROMPT = """You are the AI assistant inside "Element Workspace", a private document workspace.
+SYSTEM_PROMPT = """You are the AI assistant inside "{project}" - a single project of the private
+"Element Workspace" document workspace.
 
 Rules:
-- You can inspect and modify user files ONLY through the provided tools. Never invent node ids.
+- The project "{project}" is your entire world: only its files exist. Never mention, read or
+  write anything outside of it, and never invent node ids.
+- You can inspect and modify the project files ONLY through the provided tools.
 - Call list_workspace when you need to discover ids, then read_file / excel_read BEFORE editing.
 - Spreadsheets: use excel_write (cells/rows) or excel_add_sheet; text documents: write_file.
 - Delete/rename/move are allowed; the user can undo every action, so mention what you changed.
@@ -69,15 +74,23 @@ def _render_tree(items: list[dict[str, Any]], depth: int = 0) -> list[str]:
 
 
 async def _attachment_context(
-    db: AsyncSession, node_ids: list[str]
+    db: AsyncSession, node_ids: list[str], project_id: str
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Build the prompt block for attached files/folders/projects."""
+    """Build the prompt block for attached files/folders/projects.
+
+    Attachments outside the current project are ignored, so a client cannot widen
+    the context by sending a foreign node id.
+    """
     blocks: list[str] = []
     meta: list[dict[str, Any]] = []
     for raw in node_ids[:8]:
         try:
             node = await get_node(db, raw)
         except (NodeError, ValueError):
+            continue
+        in_project = str(node.project_id) == project_id or str(node.id) == project_id
+        if not in_project:
+            logger.warning("Ignoring attachment %s: outside the current project", raw)
             continue
         path = await node_path(db, node)
         meta.append({"id": str(node.id), "name": node.name, "kind": node.kind, "path": path})
@@ -117,13 +130,39 @@ def _error_event(exc: ProviderError) -> dict[str, Any]:
     return {"type": "error", "code": exc.code or "provider_error", **exc.to_dict()}
 
 
-async def run_agent(db: AsyncSession, request: AgentRequest) -> AsyncIterator[dict[str, Any]]:
-    """Stream agent events. The caller forwards them over WebSocket."""
-    session = await chat_service.get_session(db, request.session_id)
+async def run_agent(
+    db: AsyncSession, request: AgentRequest, user: User
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream agent events. The caller forwards them over WebSocket.
+
+    The agent is bound to the chat session, the session is bound to a project and
+    the project belongs to one account: retrieval and every tool call are limited
+    to that project, so cross-project context is impossible by construction.
+    """
+    session = await chat_service.get_session(db, request.session_id, user)
+    if session.project_id is None:
+        yield {
+            "type": "error",
+            "code": "no_project",
+            "message": "This chat is not bound to a project. Select a project and start a new chat.",
+            "retryable": False,
+        }
+        return
+    try:
+        project = await node_service.get_project_for(db, session.project_id, user)
+    except NodeError as exc:
+        yield {
+            "type": "error",
+            "code": "no_project",
+            "message": exc.message,
+            "retryable": False,
+        }
+        return
+    project_id = str(project.id)
     await db.commit()
 
     try:
-        candidates = await registry.candidates(db, request.provider, request.model)
+        candidates = await registry.candidates(db, user, request.model)
     except NoProviderAvailable as exc:
         yield {
             "type": "error",
@@ -137,7 +176,7 @@ async def run_agent(db: AsyncSession, request: AgentRequest) -> AsyncIterator[di
     candidate_index = 0
     resolved = candidates[0]
 
-    attachment_text, attachment_meta = await _attachment_context(db, request.attachments)
+    attachment_text, attachment_meta = await _attachment_context(db, request.attachments, project_id)
     citations_payload: list[dict[str, Any]] = []
     context_block = ""
     if request.use_rag and request.text.strip():
@@ -145,7 +184,7 @@ async def run_agent(db: AsyncSession, request: AgentRequest) -> AsyncIterator[di
         retrieval = await retrieve(
             db,
             request.text,
-            project_id=str(session.project_id) if session.project_id else None,
+            project_id=project_id,
             node_ids=scope_ids,
         )
         citations_payload = [citation.to_dict() for citation in retrieval.citations]
@@ -159,10 +198,14 @@ async def run_agent(db: AsyncSession, request: AgentRequest) -> AsyncIterator[di
             f"(use it directly, or use tools for more):\n\n{attachment_text}"
         )
 
-    system_prompt = SYSTEM_PROMPT
+    system_prompt = SYSTEM_PROMPT.replace("{project}", project.name)
+    system_prompt += (
+        f"\n\nCurrent project: \"{project.name}\" (id={project.id}). "
+        "Only files inside this project exist for you; never reference other projects."
+    )
     if context_block:
         system_prompt += (
-            "\n\nRetrieved context from the workspace index (cite as [n]):\n\n" + context_block
+            "\n\nRetrieved context from this project's index (cite as [n]):\n\n" + context_block
         )
 
     previous = await chat_service.history(db, session.id, limit=30)
@@ -344,7 +387,10 @@ async def run_agent(db: AsyncSession, request: AgentRequest) -> AsyncIterator[di
         ctx = ToolContext(
             db=db,
             session_id=session.id,
-            project_id=str(session.project_id) if session.project_id else None,
+            project_id=project_id,
+            owner_id=str(user.id),
+            user=user,
+            is_admin=user.is_admin,
         )
         tool_payloads: list[dict[str, Any]] = []
         for call in tool_calls:
