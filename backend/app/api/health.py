@@ -9,8 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import __version__
 from app.config import settings
 from app.db import get_db
-from app.llm.catalog import PROVIDERS
-from app.llm.factory import DEFAULT_PROVIDER, registry
 from app.llm.local_embeddings import local_embeddings_available
 from app.logging_config import get_logger
 from app.services.vectorstore import vector_store
@@ -53,12 +51,6 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
     redis_ok, redis_message = await _check_redis()
 
     embedding_configured = ["local"] if local_embeddings_available() else []
-    views = await registry.list_providers(db, None)
-    prefs = await registry.preferences(db)
-    configured = [view.name for view in views if view.configured]
-    default_provider = str(prefs.get("provider") or DEFAULT_PROVIDER)
-    default_model = str(prefs.get("model") or settings.llm_model)
-
     warnings: list[str] = []
     banner: str | None = None
     if settings.secret_key_is_insecure:
@@ -95,11 +87,13 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
             "redis": {"ok": redis_ok, "message": redis_message},
         },
         "providers": {
-            "configured": configured,
+            # Chat endpoints are per account (model_connections); the public
+            # probe only reports the local embedding backend.
+            "configured": [],
             "embedding_configured": embedding_configured,
-            "default_provider": default_provider if default_provider in PROVIDERS else DEFAULT_PROVIDER,
-            "default_model": default_model,
-            "details": [view.to_dict() for view in views],
+            "default_provider": "",
+            "default_model": "",
+            "details": [],
             "auth": "required",
         },
         "banner": banner,

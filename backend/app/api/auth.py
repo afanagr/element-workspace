@@ -17,8 +17,9 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 CurrentUser = Depends(current_user)
 
 
-def _public(user: User) -> UserOut:
-    return UserOut.model_validate(user_service.user_to_dict(user))
+async def _public(user: User, db: AsyncSession) -> UserOut:
+    connections = await user_service.list_connections(db, user)
+    return UserOut.model_validate(user_service.user_to_dict(user, connections=connections))
 
 
 @router.post("/login", response_model=LoginOut)
@@ -27,7 +28,7 @@ async def login(payload: LoginIn, db: AsyncSession = Depends(get_db)) -> LoginOu
     token, expires = await user_service.issue_token(db, user)
     await db.commit()
     logger.info("User '%s' signed in", user.username)
-    return LoginOut(token=token, expires_at=expires, user=_public(user))
+    return LoginOut(token=token, expires_at=expires, user=await _public(user, db))
 
 
 @router.post("/logout")
@@ -42,8 +43,8 @@ async def logout(
 
 
 @router.get("/me", response_model=UserOut)
-async def me(user: User = CurrentUser) -> UserOut:
-    return _public(user)
+async def me(user: User = CurrentUser, db: AsyncSession = Depends(get_db)) -> UserOut:
+    return await _public(user, db)
 
 
 @router.post("/password")

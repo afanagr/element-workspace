@@ -1,17 +1,18 @@
-"""OpenAI-compatible clients: DeepSeek, Qwen (DashScope) and local Qwen servers.
+"""Generic OpenAI-compatible chat client.
 
-All three speak the OpenAI chat-completions dialect (tool calling and
-``stream_options.include_usage`` included), so they share one client class.
+Every model connection (DeepSeek, DashScope/Qwen, Ollama, vLLM, LM Studio, an
+internal gateway, ...) is just a base URL + API key + model name, so one client
+class serves all of them.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from typing import Sequence
 
 from app.config import settings
 from app.llm.base import ProviderCapabilities, ProviderHealth
-from app.llm.catalog import ProviderMeta
 from app.llm.openai_provider import OpenAIProvider
 from app.llm.schemas import ProviderError
 
@@ -23,24 +24,27 @@ class CompatibleProvider(OpenAIProvider):
 
     def __init__(
         self,
-        meta: ProviderMeta,
         *,
+        name: str,
         api_key: str,
-        base_url: str | None = None,
-        default_model: str | None = None,
-        capabilities: ProviderCapabilities | None = None,
-        dynamic_models: bool = False,
+        base_url: str,
+        default_model: str,
+        label: str | None = None,
+        models: Sequence[str] | None = None,
+        supports_tools: bool = True,
+        dynamic_models: bool = True,
     ) -> None:
         super().__init__(
             api_key=api_key,
-            base_url=base_url or meta.base_url or "",
-            name=meta.name,
-            label=meta.label,
-            models=list(meta.models),
-            default_model=default_model or meta.default_model,
-            capabilities=capabilities
-            or ProviderCapabilities(
-                supports_tools=True, supports_vision=False, supports_embeddings=False
+            base_url=base_url,
+            name=name,
+            label=label or name,
+            models=list(models) if models else [default_model],
+            default_model=default_model,
+            capabilities=ProviderCapabilities(
+                supports_tools=supports_tools,
+                supports_vision=False,
+                supports_embeddings=False,
             ),
             supports_stream_options=True,
         )
@@ -86,4 +90,3 @@ class CompatibleProvider(OpenAIProvider):
                 message="Timed out while checking the endpoint",
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
-

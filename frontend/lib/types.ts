@@ -70,30 +70,18 @@ export interface EmbeddingProviderInfo {
   models: string[];
 }
 
-export interface Preferences {
-  provider: string;
-  model: string;
-  embedding_provider: string;
-  embedding_model: string;
-}
-
 export interface ProvidersResponse {
   providers: ProviderInfo[];
-  preferences: Preferences;
   embedding_providers: EmbeddingProviderInfo[];
   chat_available: boolean;
   degraded_banner: string | null;
-  default_provider?: string;
 }
 
 export interface SettingsResponse {
   providers: ProviderInfo[];
-  preferences: Preferences;
   embedding_providers: EmbeddingProviderInfo[];
   secret_key_insecure: boolean;
   max_upload_mb: number;
-  default_provider: string;
-  default_model: string;
   auth_enabled: boolean;
   user: UserInfo;
   admin_password_is_default: boolean;
@@ -195,19 +183,12 @@ export interface UserStats {
   chunks: number;
 }
 
-export interface ProviderConfigInfo {
-  configured: boolean;
-  key_configured: boolean;
-  key_masked: string;
-  source: 'user' | 'environment' | 'local' | 'none' | string;
-  model: string;
-  model_override: string;
-  default_model: string;
+export interface ModelConnectionInfo {
+  name: string;
   base_url: string;
-  base_url_override: string;
-  default_base_url: string;
-  requires_api_key: boolean;
-  local: boolean;
+  key_masked: string;
+  has_key: boolean;
+  model: string;
 }
 
 export interface UserInfo {
@@ -217,13 +198,7 @@ export interface UserInfo {
   role: UserRole;
   is_admin: boolean;
   is_active: boolean;
-  deepseek_configured: boolean;
-  deepseek_key_masked: string;
-  deepseek_model: string;
-  qwen_configured: boolean;
-  qwen_key_masked: string;
-  qwen_model: string;
-  providers?: Record<string, ProviderConfigInfo>;
+  connections: ModelConnectionInfo[];
   created_at?: string | null;
   updated_at?: string | null;
   stats?: UserStats | null;
@@ -257,18 +232,20 @@ export interface AdminOverview {
   chunks: number;
 }
 
+export interface ModelConnectionPayload {
+  name: string;
+  base_url: string;
+  model: string;
+  api_key?: string | null;
+  clear_key?: boolean;
+}
+
 export interface UserCreatePayload {
   username: string;
   password: string;
   display_name?: string;
   role?: UserRole;
-  deepseek_api_key?: string | null;
-  deepseek_model?: string | null;
-  qwen_api_key?: string | null;
-  qwen_model?: string | null;
-  qwen_local_api_key?: string | null;
-  qwen_local_model?: string | null;
-  provider_base_urls?: Record<string, string>;
+  connections?: ModelConnectionPayload[];
 }
 
 export interface UserUpdatePayload {
@@ -276,15 +253,6 @@ export interface UserUpdatePayload {
   password?: string;
   role?: UserRole;
   is_active?: boolean;
-  deepseek_api_key?: string | null;
-  deepseek_model?: string | null;
-  clear_deepseek_key?: boolean;
-  qwen_api_key?: string | null;
-  qwen_model?: string | null;
-  clear_qwen_key?: boolean;
-  qwen_local_api_key?: string | null;
-  qwen_local_model?: string | null;
-  clear_qwen_local_key?: boolean;
-  provider_base_urls?: Record<string, string>;
+  connections?: ModelConnectionPayload[];
 }
 

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ORMModel(BaseModel):
@@ -134,26 +134,6 @@ class OperationOut(ORMModel):
 
 
 # ---------------------------------------------------------- providers/settings
-class CredentialIn(BaseModel):
-    provider: str
-    api_key: str | None = None
-    base_url: str | None = None
-    default_model: str | None = None
-    enabled: bool | None = None
-
-    @field_validator("provider")
-    @classmethod
-    def _lower(cls, value: str) -> str:
-        return value.strip().lower()
-
-
-class PreferencesIn(BaseModel):
-    provider: str | None = None
-    model: str | None = None
-    embedding_provider: str | None = None
-    embedding_model: str | None = None
-
-
 class ProviderTestOut(BaseModel):
     provider: str
     ok: bool
@@ -196,6 +176,23 @@ class UserStatsOut(BaseModel):
     chunks: int = 0
 
 
+class ModelConnectionOut(BaseModel):
+    name: str
+    base_url: str
+    key_masked: str = ""
+    has_key: bool = False
+    model: str
+
+
+class ModelConnectionIn(BaseModel):
+    name: str = Field(min_length=1, max_length=32)
+    base_url: str = Field(min_length=8, max_length=500)
+    model: str = Field(min_length=1, max_length=128)
+    # Empty/missing key keeps the stored one; clear_key removes it.
+    api_key: str | None = Field(default=None, max_length=500)
+    clear_key: bool = False
+
+
 class UserOut(ORMModel):
     id: uuid.UUID
     username: str
@@ -203,15 +200,8 @@ class UserOut(ORMModel):
     role: Literal["admin", "user"]
     is_admin: bool = False
     is_active: bool = True
-    deepseek_configured: bool = False
-    deepseek_key_masked: str = ""
-    deepseek_model: str = ""
-    qwen_configured: bool = False
-    qwen_key_masked: str = ""
-    qwen_model: str = ""
-    providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    connections: list[ModelConnectionOut] = Field(default_factory=list)
     created_at: datetime | None = None
-
     updated_at: datetime | None = None
     stats: UserStatsOut | None = None
 
@@ -232,13 +222,7 @@ class UserCreateIn(BaseModel):
     password: str = Field(min_length=6, max_length=200)
     display_name: str = Field(default="", max_length=120)
     role: Literal["admin", "user"] = "user"
-    deepseek_api_key: str | None = Field(default=None, max_length=200)
-    deepseek_model: str | None = Field(default=None, max_length=64)
-    qwen_api_key: str | None = Field(default=None, max_length=200)
-    qwen_model: str | None = Field(default=None, max_length=64)
-    qwen_local_api_key: str | None = Field(default=None, max_length=200)
-    qwen_local_model: str | None = Field(default=None, max_length=64)
-    provider_base_urls: dict[str, str] | None = None
+    connections: list[ModelConnectionIn] | None = None
 
 
 class UserUpdateIn(BaseModel):
@@ -246,16 +230,7 @@ class UserUpdateIn(BaseModel):
     password: str | None = Field(default=None, min_length=6, max_length=200)
     role: Literal["admin", "user"] | None = None
     is_active: bool | None = None
-    deepseek_api_key: str | None = Field(default=None, max_length=200)
-    deepseek_model: str | None = Field(default=None, max_length=64)
-    clear_deepseek_key: bool = False
-    qwen_api_key: str | None = Field(default=None, max_length=200)
-    qwen_model: str | None = Field(default=None, max_length=64)
-    clear_qwen_key: bool = False
-    qwen_local_api_key: str | None = Field(default=None, max_length=200)
-    qwen_local_model: str | None = Field(default=None, max_length=64)
-    clear_qwen_local_key: bool = False
-    provider_base_urls: dict[str, str] | None = None
+    connections: list[ModelConnectionIn] | None = None
 
 
 

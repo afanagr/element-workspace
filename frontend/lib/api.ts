@@ -6,7 +6,6 @@ import type {
   HealthResponse,
   IndexStatus,
   LoginResponse,
-  Preferences,
   ProvidersResponse,
   SessionInfo,
   SettingsResponse,
@@ -224,11 +223,6 @@ export const api = {
 
   providers: () => request<ProvidersResponse>('/api/providers'),
   settings: () => request<SettingsResponse>('/api/settings'),
-  savePreferences: (payload: Partial<Preferences>) =>
-    request<{ preferences: Preferences; reindex_required?: boolean }>(
-      '/api/settings/preferences',
-      { method: 'PUT', body: JSON.stringify(payload) },
-    ),
   testProvider: (provider: string) =>
     request<{ provider: string; ok: boolean; message: string; latency_ms: number; models: string[] }>(
       `/api/providers/${provider}/test`,

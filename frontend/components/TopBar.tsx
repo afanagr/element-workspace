@@ -11,6 +11,7 @@ interface TopBarProps {
   onRefreshHealth: () => void;
   activeProvider: string | null;
   activeModel: string | null;
+  providerHint?: string | null;
   indexSummary?: string;
   projectName?: string | null;
   viewingOwner?: string | null;
@@ -21,6 +22,7 @@ export function TopBar({
   onRefreshHealth,
   activeProvider,
   activeModel,
+  providerHint,
   indexSummary,
   projectName,
   viewingOwner,
@@ -57,12 +59,7 @@ export function TopBar({
 
   const providerLabel = activeProvider
     ? `${activeProvider}${activeModel ? ` · ${activeModel}` : ''}`
-    : health?.providers.configured.length
-      ? t('app.defaultProvider', {
-          provider: health.providers.default_provider,
-          model: health.providers.default_model,
-        })
-      : t('app.noProvider');
+    : providerHint || t('app.noProvider');
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b px-3">

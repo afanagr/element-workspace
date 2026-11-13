@@ -1,10 +1,9 @@
-"""Chat provider registry: construction, per-user keys and local embeddings.
+"""Runtime chat registry.
 
-Cloud keys (DeepSeek and Qwen/DashScope) are issued per account by an
-administrator; deployment-wide environment variables act as a fallback for
-accounts without a personal key. ``qwen-local`` speaks the same OpenAI dialect
-against an Ollama/vLLM/LM Studio endpoint and needs no key - it is enabled by
-setting ``QWEN_LOCAL_BASE_URL``.
+There is no built-in provider catalogue: every account owns a list of
+OpenAI-compatible connections (name, base URL, encrypted API key, model). The
+registry turns those rows into clients, resolves the connection requested by
+the chat composer, falls back to the other connections and caches clients.
 """
 
 from __future__ import annotations
@@ -12,35 +11,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.llm.base import LLMProvider, ProviderCapabilities, ProviderHealth
-from app.llm.catalog import (
-    EMBEDDING_MODELS,
-    EMBEDDING_PROVIDERS,
-    FALLBACK_ORDER,
-    PROVIDERS,
-    ProviderMeta,
-)
+from app.llm.base import LLMProvider, ProviderHealth
+from app.llm.catalog import EMBEDDING_MODELS, EMBEDDING_PROVIDERS
 from app.llm.compatible_provider import CompatibleProvider
 from app.llm.local_embeddings import LocalEmbeddingProvider, local_embeddings_available
 from app.llm.schemas import NoProviderAvailable
 from app.logging_config import get_logger
-from app.models import AppSetting, User
-from app.security import fingerprint, mask_secret
-from app.services import users as user_service
+from app.models import ModelConnection, User
+from app.security import decrypt_secret, fingerprint, mask_secret
 
 logger = get_logger(__name__)
 
-PROVIDER_NAMES: tuple[str, ...] = FALLBACK_ORDER
-DEFAULT_PROVIDER: str = (
-    settings.llm_provider if settings.llm_provider in PROVIDERS else PROVIDER_NAMES[0]
+NO_CONNECTIONS_MESSAGE = (
+    "No models are connected to this account. Ask an administrator to add a "
+    "connection (name, address, key, model) in /admin → Users."
 )
-# Backwards-compatible alias: the provider used when nothing else is specified.
-PROVIDER_NAME = DEFAULT_PROVIDER
-PREFERENCES_KEY = "preferences"
-_LOCAL_PLACEHOLDER_KEY = "local-endpoint"
+_PLACEHOLDER_KEY = "no-api-key"
 
 
 @dataclass(slots=True)
@@ -78,7 +68,7 @@ class ProviderView:
     supports_embeddings: bool
     local: bool
     api_key_masked: str = ""
-    requires_api_key: bool = True
+    requires_api_key: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -101,99 +91,107 @@ class ProviderView:
 
 
 class ProviderRegistry:
-    """Builds chat clients for every provider that has credentials."""
+    """Builds chat clients from the model connections of one account."""
 
     def __init__(self) -> None:
-        self._chat: dict[tuple[str, str, str, str | None], LLMProvider] = {}
+        self._chat: dict[tuple[str, str, str, str], LLMProvider] = {}
         self._local: LocalEmbeddingProvider | None = None
 
-    # ---------------------------------------------------------- lifecycle
     def invalidate(self) -> None:
         self._chat.clear()
         self._local = None
 
-    # ----------------------------------------------------------- metadata
-    def names(self) -> tuple[str, ...]:
-        return PROVIDER_NAMES
-
-    def meta(self, provider: str) -> ProviderMeta:
-        name = (provider or "").strip().lower()
-        if name not in PROVIDERS:
-            raise NoProviderAvailable(
-                f"Unknown provider: {provider}", details={"provider": provider}
-            )
-        return PROVIDERS[name]
-
-    def base_url_for(self, provider: str, user: User | None = None) -> str | None:
-        self.meta(provider)
-        return user_service.provider_endpoint(user, provider) or None
-
-    # --------------------------------------------------------------- chat
-    def api_key_for(self, user: User | None, provider: str = DEFAULT_PROVIDER) -> str:
-        return user_service.provider_key(user, provider)
-
-    def is_available(self, user: User | None, provider: str) -> bool:
-        self.meta(provider)
-        return user_service.provider_is_available(user, provider)
-
-    def model_for(
-        self,
-        user: User | None,
-        provider: str = DEFAULT_PROVIDER,
-        requested: str | None = None,
-    ) -> str:
-        return (requested or "").strip() or user_service.provider_model(user, provider)
-
-    def missing_message(self, provider: str) -> str:
-        meta = self.meta(provider)
-        if meta.local:
-            return (
-                "The local Qwen endpoint is not configured. Set the address in the user card "
-                "(or QWEN_LOCAL_BASE_URL on the server) and point it at Ollama/vLLM "
-                "(Ollama: http://host.docker.internal:11434/v1)."
-            )
-        if meta.name == "qwen":
-            return (
-                "No Qwen API key is assigned to this account. "
-                "Ask an administrator to add one, or set QWEN_API_KEY in .env."
-            )
-        return (
-            "No DeepSeek API key is assigned to this account. "
-            "Ask an administrator to add one, or set DEEPSEEK_API_KEY in .env."
+    # ---------------------------------------------------------- connections
+    async def list_connections(
+        self, db: AsyncSession, user: User | None
+    ) -> list[ModelConnection]:
+        if user is None:
+            return []
+        result = await db.execute(
+            select(ModelConnection)
+            .where(ModelConnection.user_id == user.id)
+            .order_by(ModelConnection.name)
         )
+        return list(result.scalars().all())
 
-    def _build(
-        self, provider: str, user: User | None, model: str | None = None
-    ) -> LLMProvider:
-        meta = self.meta(provider)
-        api_key = self.api_key_for(user, provider)
-        if not api_key and meta.local:
-            # Ollama and friends accept any non-empty bearer token.
-            api_key = _LOCAL_PLACEHOLDER_KEY
-        if not api_key:
-            raise NoProviderAvailable(
-                self.missing_message(provider), details={"provider": meta.name}
-            )
-        base_url = self.base_url_for(provider, user)
-        chosen = self.model_for(user, provider, model)
-        cache_key = (meta.name, fingerprint(api_key), chosen, base_url)
+    async def _find_connection(
+        self, db: AsyncSession, user: User | None, provider: str | None
+    ) -> ModelConnection | None:
+        connections = await self.list_connections(db, user)
+        if not connections:
+            return None
+        wanted = (provider or "").strip().lower()
+        if not wanted:
+            return connections[0]
+        for connection in connections:
+            if connection.name.lower() == wanted:
+                return connection
+        return None
+
+    def _build(self, connection: ModelConnection, model: str | None = None) -> LLMProvider:
+        raw_key = decrypt_secret(connection.api_key_enc)
+        api_key = raw_key or _PLACEHOLDER_KEY
+        chosen = (model or "").strip() or connection.model
+        cache_key = (str(connection.id), fingerprint(api_key), connection.base_url, chosen)
         cached = self._chat.get(cache_key)
         if cached is not None:
             return cached
         client = CompatibleProvider(
-            meta,
+            name=connection.name,
+            label=connection.name,
             api_key=api_key,
-            base_url=base_url,
+            base_url=connection.base_url,
             default_model=chosen,
-            capabilities=ProviderCapabilities(
-                supports_tools=meta.supports_tools,
-                supports_vision=meta.supports_vision,
-                supports_embeddings=meta.supports_embeddings,
-            ),
-            dynamic_models=meta.name != "deepseek",
+            models=[connection.model],
+            supports_tools=connection.supports_tools,
+            dynamic_models=True,
         )
         self._chat[cache_key] = client
         return client
+
+    # --------------------------------------------------------------- chat
+    async def candidates(
+        self,
+        db: AsyncSession,
+        user: User | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+    ) -> list[ResolvedProvider]:
+        """Connections that can serve the request, requested one first."""
+        connections = await self.list_connections(db, user)
+        if not connections:
+            raise NoProviderAvailable(NO_CONNECTIONS_MESSAGE)
+
+        requested = (provider or "").strip()
+        requested_key = requested.lower()
+        selected_model = (model or "").strip()
+        ordered = sorted(
+            connections,
+            key=lambda item: 0 if item.name.lower() == requested_key else 1,
+        )
+        resolved: list[ResolvedProvider] = []
+        for connection in ordered:
+            use_model = (
+                selected_model
+                if requested_key and connection.name.lower() == requested_key
+                else None
+            )
+            try:
+                client = self._build(connection, use_model)
+            except Exception as exc:  # noqa: BLE001 - one model must not break chat
+                logger.warning("Model connection %s failed: %s", connection.name, exc)
+                continue
+            resolved.append(
+                ResolvedProvider(
+                    provider=client,
+                    provider_name=connection.name,
+                    model=client.default_model,
+                    requested=requested or None,
+                )
+            )
+        if resolved:
+            return resolved
+        raise NoProviderAvailable(NO_CONNECTIONS_MESSAGE)
 
     async def resolve(
         self,
@@ -205,74 +203,19 @@ class ProviderRegistry:
         candidates = await self.candidates(db, user, model, provider)
         return candidates[0]
 
-    async def candidates(
-        self,
-        db: AsyncSession,
-        user: User | None = None,
-        model: str | None = None,
-        provider: str | None = None,
-    ) -> list[ResolvedProvider]:
-        """Providers that can serve this request, in fallback order.
-
-        The explicitly requested provider wins, then the saved preference, then
-        the static fallback order. Providers without credentials are skipped.
-        """
-        prefs = await self.preferences(db)
-        requested = (provider or "").strip().lower() or None
-        preferred = str(prefs.get("provider") or DEFAULT_PROVIDER).strip().lower()
-        order: list[str] = []
-        for name in (requested, preferred, *PROVIDER_NAMES):
-            if not name or name in order or name not in PROVIDERS:
-                continue
-            order.append(name)
-
-        selected_model = (model or "").strip()
-        model_owner = requested or preferred
-        resolved: list[ResolvedProvider] = []
-        for name in order:
-            if not self.is_available(user, name):
-                continue
-            try:
-                client = self._build(
-                    name, user, selected_model if name == model_owner else None
-                )
-            except NoProviderAvailable:
-                continue
-            except Exception as exc:  # noqa: BLE001 - one provider must not break chat
-                logger.warning("%s client initialisation failed: %s", name, exc)
-                continue
-            resolved.append(
-                ResolvedProvider(
-                    provider=client,
-                    provider_name=name,
-                    model=client.default_model,
-                    requested=requested,
-                )
-            )
-        if resolved:
-            return resolved
-        raise NoProviderAvailable(
-            "No chat provider is available. Ask an administrator to assign a DeepSeek "
-            "or Qwen API key, or set QWEN_LOCAL_BASE_URL to use a local Qwen model.",
-            details={
-                "providers": list(PROVIDER_NAMES),
-                "username": getattr(user, "username", None),
-            },
-        )
-
     async def get_provider(
         self,
         db: AsyncSession,
         user: User | None = None,
         provider: str | None = None,
     ) -> LLMProvider | None:
-        name = (provider or DEFAULT_PROVIDER).strip().lower()
-        if name not in PROVIDERS or not self.is_available(user, name):
+        connection = await self._find_connection(db, user, provider)
+        if connection is None:
             return None
         try:
-            return self._build(name, user)
-        except Exception as exc:  # noqa: BLE001 - callers treat None as unavailable
-            logger.warning("%s client initialisation failed: %s", name, exc)
+            return self._build(connection)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Model connection %s failed: %s", connection.name, exc)
             return None
 
     async def is_configured(
@@ -281,10 +224,42 @@ class ProviderRegistry:
         user: User | None = None,
         provider: str | None = None,
     ) -> bool:
-        name = (provider or DEFAULT_PROVIDER).strip().lower()
-        if name not in PROVIDERS:
-            return False
-        return self.is_available(user, name)
+        return await self._find_connection(db, user, provider) is not None
+
+    # -------------------------------------------------------------- views
+    def _view(self, connection: ModelConnection) -> ProviderView:
+        key = decrypt_secret(connection.api_key_enc)
+        return ProviderView(
+            name=connection.name,
+            label=connection.name,
+            configured=True,
+            enabled=True,
+            source="user",
+            models=[connection.model],
+            default_model=connection.model,
+            base_url=connection.base_url,
+            supports_tools=connection.supports_tools,
+            supports_vision=False,
+            supports_embeddings=False,
+            local=False,
+            api_key_masked=mask_secret(key),
+            requires_api_key=bool(connection.api_key_enc),
+        )
+
+    async def provider_view(
+        self,
+        db: AsyncSession,
+        user: User | None = None,
+        provider: str | None = None,
+    ) -> ProviderView | None:
+        connection = await self._find_connection(db, user, provider)
+        return self._view(connection) if connection is not None else None
+
+    async def list_providers(
+        self, db: AsyncSession, user: User | None = None
+    ) -> list[ProviderView]:
+        connections = await self.list_connections(db, user)
+        return [self._view(connection) for connection in connections]
 
     # -------------------------------------------------------- embeddings
     async def resolve_embeddings(
@@ -293,116 +268,11 @@ class ProviderRegistry:
         preferred: str | None = None,
         model: str | None = None,
     ) -> ResolvedEmbedding:
-        """Vectors are always produced locally; there is no embeddings API."""
+        """Vectors are always produced locally; chat endpoints are text-only."""
         if self._local is None:
             self._local = LocalEmbeddingProvider(settings.local_embedding_model)
         chosen = (model or "").strip() or settings.local_embedding_model
         return ResolvedEmbedding(self._local, "local", chosen)
-
-    # --------------------------------------------------------- preferences
-    async def preferences(self, db: AsyncSession) -> dict[str, Any]:
-        defaults: dict[str, Any] = {
-            "provider": DEFAULT_PROVIDER,
-            "model": self.model_for(None, DEFAULT_PROVIDER),
-            "embedding_provider": "local",
-            "embedding_model": settings.local_embedding_model,
-        }
-        row = await db.get(AppSetting, PREFERENCES_KEY)
-        if row is not None and isinstance(row.value, dict):
-            for key, value in row.value.items():
-                if key in defaults and isinstance(value, str) and value.strip():
-                    defaults[key] = value.strip()
-        if defaults["provider"] not in PROVIDERS:
-            defaults["provider"] = DEFAULT_PROVIDER
-        defaults["embedding_provider"] = "local"
-        return defaults
-
-    async def save_preferences(self, db: AsyncSession, values: dict[str, Any]) -> dict[str, Any]:
-        current = await self.preferences(db)
-        allowed = {"provider", "model"}
-        updates = {
-            key: str(value).strip()
-            for key, value in values.items()
-            if key in allowed and isinstance(value, str) and value.strip()
-        }
-        provider = updates.get("provider")
-        if provider is not None:
-            provider = provider.lower()
-            if provider not in PROVIDERS:
-                raise ValueError(f"Unknown provider: {provider}")
-            updates["provider"] = provider
-            if "model" not in updates:
-                updates["model"] = self.model_for(None, provider)
-        current.update(updates)
-        row = await db.get(AppSetting, PREFERENCES_KEY)
-        if row is None:
-            row = AppSetting(key=PREFERENCES_KEY, value=current)
-            db.add(row)
-        else:
-            row.value = dict(current)
-        await db.flush()
-        self.invalidate()
-        return current
-
-    # -------------------------------------------------------------- views
-    def _view(
-        self,
-        meta: ProviderMeta,
-        *,
-        configured: bool,
-        source: str,
-        model: str,
-        key: str = "",
-        base_url: str | None = None,
-    ) -> ProviderView:
-        return ProviderView(
-            name=meta.name,
-            label=meta.label,
-            configured=configured,
-            enabled=True,
-            source=source,
-            models=list(meta.models),
-            default_model=model,
-            base_url=base_url,
-            supports_tools=meta.supports_tools,
-            supports_vision=meta.supports_vision,
-            supports_embeddings=meta.supports_embeddings,
-            local=meta.local,
-            requires_api_key=meta.requires_api_key,
-            api_key_masked=mask_secret(key),
-        )
-
-    async def provider_view(
-        self,
-        db: AsyncSession,
-        user: User | None = None,
-        provider: str | None = None,
-    ) -> ProviderView:
-        name = (provider or DEFAULT_PROVIDER).strip().lower()
-        meta = self.meta(name)
-        key = self.api_key_for(user, name)
-        configured = self.is_available(user, name)
-        if user_service.has_personal_key(user, name):
-            source = "user"
-        elif configured and meta.local:
-            source = "local"
-        elif configured:
-            source = "environment"
-        else:
-            source = "none"
-        return self._view(
-            meta,
-            configured=configured,
-            source=source,
-            model=self.model_for(user, name),
-            key=key,
-            base_url=self.base_url_for(name, user),
-        )
-
-    async def list_providers(
-        self, db: AsyncSession, user: User | None = None
-    ) -> list[ProviderView]:
-        return [await self.provider_view(db, user, name) for name in PROVIDER_NAMES]
 
     async def embedding_options(self) -> list[dict[str, Any]]:
         available = local_embeddings_available()
@@ -416,21 +286,20 @@ class ProviderRegistry:
             for name in EMBEDDING_PROVIDERS
         ]
 
+    # -------------------------------------------------------------- health
     async def health(
         self,
         db: AsyncSession,
         user: User | None = None,
         provider: str | None = None,
     ) -> ProviderHealth:
-        name = (provider or DEFAULT_PROVIDER).strip().lower()
-        if name not in PROVIDERS:
-            return ProviderHealth(ok=False, message=f"Unknown provider: {name}")
-        if not self.is_available(user, name):
-            return ProviderHealth(ok=False, message=self.missing_message(name))
+        connection = await self._find_connection(db, user, provider)
+        if connection is None:
+            if provider:
+                return ProviderHealth(ok=False, message=f"Model connection '{provider}' was not found")
+            return ProviderHealth(ok=False, message=NO_CONNECTIONS_MESSAGE)
         try:
-            client = self._build(name, user)
-        except NoProviderAvailable as exc:
-            return ProviderHealth(ok=False, message=exc.message)
+            client = self._build(connection)
         except Exception as exc:  # noqa: BLE001
             return ProviderHealth(ok=False, message=f"{type(exc).__name__}: {exc}")
         return await client.health()

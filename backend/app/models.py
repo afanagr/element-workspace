@@ -16,6 +16,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -42,9 +43,12 @@ class TimestampMixin:
 class User(Base, TimestampMixin):
     """Account created by an administrator.
 
-    ``role`` is either ``admin`` or ``user``. Every user gets an individual
-    DeepSeek key from the admin; the key is stored encrypted (Fernet) and never
-    leaves the API unmasked.
+    ``role`` is either ``admin`` or ``user``. Chat endpoints are not hard-coded:
+    an administrator attaches one or more OpenAI-compatible connections to every
+    account (name, base URL, API key, model), see :class:`ModelConnection`.
+
+    The ``deepseek_*`` / ``qwen_*`` / ``provider_base_urls`` columns are legacy
+    (pre-0005) and are kept only so the data migration could copy them.
     """
 
     __tablename__ = "users"
@@ -55,14 +59,13 @@ class User(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(String(16), default="user", nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # --- legacy per-provider columns (superseded by model_connections) ---
     deepseek_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     deepseek_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     qwen_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     qwen_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     qwen_local_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     qwen_local_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    # Per-account endpoint overrides: {"deepseek": "https://...", "qwen": "..."}.
-    # An empty/missing entry means "use the deployment-wide default".
     provider_base_urls: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     @property
@@ -72,6 +75,30 @@ class User(Base, TimestampMixin):
     @property
     def label(self) -> str:
         return self.display_name or self.username
+
+
+class ModelConnection(Base, TimestampMixin):
+    """An OpenAI-compatible chat endpoint connected to one account.
+
+    Everything the agent needs is here: a display name (also used as the id in
+    chat payloads), the base URL, the model name and an encrypted API key. The
+    user picks one of these connections in the chat composer.
+    """
+
+    __tablename__ = "model_connections"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_model_connections_user_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(32), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    supports_tools: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class AuthToken(Base):

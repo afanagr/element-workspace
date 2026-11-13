@@ -12,7 +12,6 @@ from app import __version__
 from app.api import admin, auth, chat, files, health, providers
 from app.config import settings
 from app.db import session_scope
-from app.llm.factory import DEFAULT_PROVIDER, PROVIDER_NAMES
 from app.llm.schemas import NoProviderAvailable
 from app.logging_config import configure_logging, get_logger
 from app.services import users as user_service
@@ -28,12 +27,9 @@ async def lifespan(app: FastAPI):
     configure_logging()
     storage.ensure()
     logger.info(
-        "Starting %s v%s | providers=%s default=%s/%s | workspace=%s",
+        "Starting %s v%s | chat models are configured per account | workspace=%s",
         settings.app_name,
         __version__,
-        ",".join(PROVIDER_NAMES),
-        DEFAULT_PROVIDER,
-        settings.llm_model,
         settings.workspace_dir,
     )
     if settings.secret_key_is_insecure:

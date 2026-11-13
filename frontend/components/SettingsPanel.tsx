@@ -17,8 +17,6 @@ export function SettingsPanel() {
   const [notice, setNotice] = useState<string | null>(null);
   const [test, setTest] = useState<Record<string, { ok: boolean; message: string }>>({});
   const [embeddingTest, setEmbeddingTest] = useState<{ ok: boolean; message: string } | null>(null);
-  const [defaultProvider, setDefaultProvider] = useState('deepseek');
-  const [defaultModel, setDefaultModel] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
@@ -35,12 +33,6 @@ export function SettingsPanel() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    if (!settings) return;
-    setDefaultProvider(settings.default_provider);
-    setDefaultModel(settings.default_model);
-  }, [settings]);
 
   const providers = settings?.providers ?? [];
 
@@ -69,24 +61,6 @@ export function SettingsPanel() {
       });
     } catch (err) {
       setEmbeddingTest({ ok: false, message: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveDefaults = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      await api.savePreferences({
-        provider: defaultProvider,
-        model: defaultModel.trim() || undefined,
-      });
-      setNotice(t('settings.defaultsSaved'));
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -181,7 +155,7 @@ export function SettingsPanel() {
                   <div>
                     <div className="font-semibold">{provider.label}</div>
                     <div className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
-                      {provider.local ? t('settings.localModel') : t('settings.cloudModel')}
+                      {t('settings.connection')}
                     </div>
                   </div>
                   <span
@@ -191,11 +165,7 @@ export function SettingsPanel() {
                         : 'text-amber-600 dark:text-amber-400'
                     }
                   >
-                    {provider.configured
-                      ? `✓ ${t('settings.keyAssigned')}`
-                      : provider.local
-                        ? t('settings.localDisabled')
-                        : t('settings.keyMissing')}
+                    {`✓ ${t('settings.connectionActive')}`}
                   </span>
                 </div>
                 <dl className="mt-2 grid gap-1">
@@ -246,7 +216,7 @@ export function SettingsPanel() {
           })}
         </div>
 
-        <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-3">
+        <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-2">
           <div>
             <dt className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
               {t('settings.embeddingProvider')}
@@ -261,14 +231,6 @@ export function SettingsPanel() {
               {t('settings.maxUpload')}
             </dt>
             <dd className="font-medium">{settings?.max_upload_mb ?? 0} MB</dd>
-          </div>
-          <div>
-            <dt className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
-              {t('settings.defaultModel')}
-            </dt>
-            <dd className="font-medium">
-              {settings?.default_provider} · {settings?.default_model}
-            </dd>
           </div>
         </dl>
 
@@ -289,57 +251,6 @@ export function SettingsPanel() {
           </p>
         ) : null}
       </section>
-
-      {auth.user.is_admin ? (
-        <section className="panel rounded-xl p-4">
-          <h2 className="mb-1 text-sm font-semibold">{t('settings.defaultsTitle')}</h2>
-          <p className="mb-3 text-[11px] text-slate-500 dark:text-zinc-400">
-            {t('settings.defaultsNote')}
-          </p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="text-xs">
-              <span className="mb-1 block text-slate-500 dark:text-zinc-400">
-                {t('app.activeProvider')}
-              </span>
-              <select
-                className="input"
-                value={defaultProvider}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  setDefaultProvider(next);
-                  const meta = providers.find((item) => item.name === next);
-                  setDefaultModel(meta?.default_model || '');
-                }}
-              >
-                {providers.map((provider) => (
-                  <option key={provider.name} value={provider.name}>
-                    {provider.label}
-                    {provider.configured ? '' : ` — ${t('settings.keyMissing')}`}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-xs">
-              <span className="mb-1 block text-slate-500 dark:text-zinc-400">
-                {t('settings.model')}
-              </span>
-              <input
-                className="input"
-                value={defaultModel}
-                onChange={(event) => setDefaultModel(event.target.value)}
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            className="btn btn-primary mt-3"
-            disabled={busy}
-            onClick={() => void saveDefaults()}
-          >
-            {t('common.save')}
-          </button>
-        </section>
-      ) : null}
 
       <section className="panel rounded-xl p-4">
         <h2 className="mb-3 text-sm font-semibold">{t('settings.passwordTitle')}</h2>

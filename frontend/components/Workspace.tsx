@@ -227,6 +227,11 @@ export default function Workspace() {
         }}
         activeProvider={chat.active.provider}
         activeModel={chat.active.model}
+        providerHint={
+          providers?.providers[0]
+            ? `${providers.providers[0].name} · ${providers.providers[0].default_model}`
+            : null
+        }
         indexSummary={indexSummary}
         projectName={activeProject?.name ?? null}
         viewingOwner={ownerFilter}

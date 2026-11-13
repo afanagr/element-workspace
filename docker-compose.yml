@@ -11,6 +11,7 @@ x-app-env: &app-env
   QDRANT_URL: http://qdrant:6333
   QDRANT_COLLECTION: ${QDRANT_COLLECTION:-workspace_documents}
   WORKSPACE_DIR: /data/workspace
+  # Legacy provider vars: only read by migration 0005; connections are per account.
   LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
   LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}

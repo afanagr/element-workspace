@@ -1,4 +1,4 @@
-"""Administration: user accounts, DeepSeek keys and cross-account inspection."""
+"""Administration: accounts, their model connections and cross-account data."""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import current_admin
+from app.llm.factory import registry
 from app.logging_config import get_logger
-from app.models import ChatSession, Node, User
-from app.schemas import AdminProjectOut, UserCreateIn, UserUpdateIn, UserOut
+from app.models import ChatSession, ModelConnection, Node, User
+from app.schemas import AdminProjectOut, UserCreateIn, UserOut, UserUpdateIn
 from app.services import users as user_service
 
 logger = get_logger(__name__)
@@ -52,18 +53,34 @@ async def _stats(db: AsyncSession) -> dict[str, dict[str, int]]:
     return stats
 
 
-def _public(user: User, stats: dict[str, dict[str, int]]) -> UserOut:
+def _public(
+    user: User,
+    stats: dict[str, dict[str, int]],
+    connections: list[ModelConnection],
+) -> UserOut:
     return UserOut.model_validate(
-        user_service.user_to_dict(user, stats=stats.get(str(user.id), {}))
+        user_service.user_to_dict(
+            user,
+            stats=stats.get(str(user.id), {}),
+            connections=connections,
+        )
     )
+
+
+def _connection_payloads(payload: UserCreateIn | UserUpdateIn) -> list[dict] | None:
+    if payload.connections is None:
+        return None
+    return [item.model_dump() for item in payload.connections]
 
 
 @router.get("/users", response_model=list[UserOut])
 async def list_users(
     db: AsyncSession = Depends(get_db), admin: User = CurrentAdmin
 ) -> list[UserOut]:
+    users = await user_service.list_users(db)
     stats = await _stats(db)
-    return [_public(user, stats) for user in await user_service.list_users(db)]
+    grouped = await user_service.connections_for_users(db, users)
+    return [_public(user, stats, grouped.get(user.id, [])) for user in users]
 
 
 @router.post("/users", response_model=UserOut, status_code=201)
@@ -76,18 +93,12 @@ async def create_user(
         password=payload.password,
         display_name=payload.display_name,
         role=payload.role,
-        deepseek_api_key=payload.deepseek_api_key,
-        deepseek_model=payload.deepseek_model,
-        qwen_api_key=payload.qwen_api_key,
-        qwen_model=payload.qwen_model,
-        qwen_local_api_key=payload.qwen_local_api_key,
-        qwen_local_model=payload.qwen_local_model,
-        provider_base_urls=payload.provider_base_urls,
+        connections=_connection_payloads(payload) or [],
     )
-
     await db.commit()
+    registry.invalidate()
     logger.info("Admin '%s' created user '%s'", admin.username, user.username)
-    return _public(user, {})
+    return _public(user, {}, await user_service.list_connections(db, user))
 
 
 @router.patch("/users/{user_id}", response_model=UserOut)
@@ -105,20 +116,11 @@ async def update_user(
         password=payload.password,
         role=payload.role,
         is_active=payload.is_active,
-        deepseek_api_key=payload.deepseek_api_key,
-        deepseek_model=payload.deepseek_model,
-        clear_deepseek_key=payload.clear_deepseek_key,
-        qwen_api_key=payload.qwen_api_key,
-        qwen_model=payload.qwen_model,
-        clear_qwen_key=payload.clear_qwen_key,
-        qwen_local_api_key=payload.qwen_local_api_key,
-        qwen_local_model=payload.qwen_local_model,
-        clear_qwen_local_key=payload.clear_qwen_local_key,
-        provider_base_urls=payload.provider_base_urls,
+        connections=_connection_payloads(payload),
     )
-
     await db.commit()
-    return _public(user, await _stats(db))
+    registry.invalidate()
+    return _public(user, await _stats(db), await user_service.list_connections(db, user))
 
 
 @router.delete("/users/{user_id}")
@@ -129,6 +131,7 @@ async def delete_user(
     username = user.username
     removed = await user_service.delete_user(db, user, actor=admin)
     await db.commit()
+    registry.invalidate()
     logger.info("Admin '%s' deleted user '%s'", admin.username, username)
     return {"deleted": True, "username": username, **removed}
 
@@ -187,11 +190,13 @@ async def overview(db: AsyncSession = Depends(get_db), admin: User = CurrentAdmi
         for key in totals:
             totals[key] += entry.get(key, 0)
     users = await user_service.list_users(db)
+    connected = set(
+        (await db.execute(select(ModelConnection.user_id).distinct())).scalars().all()
+    )
     return {
         "users": len(users),
         "active_users": sum(1 for user in users if user.is_active),
         "admins": sum(1 for user in users if user.is_admin),
-        "users_without_key": sum(1 for user in users if not user_service.has_any_provider(user)),
+        "users_without_key": sum(1 for user in users if user.id not in connected),
         **totals,
     }
-

@@ -50,12 +50,10 @@ export function ChatPanel({
 
   useEffect(() => {
     if (!providers || provider) return;
-    const preferred = providers.preferences.provider;
-    const exists = configured.some((item) => item.name === preferred);
-    const fallback = exists ? preferred : configured[0]?.name;
-    if (fallback) {
-      setProvider(fallback);
-      setModel(exists ? providers.preferences.model : '');
+    const first = configured[0];
+    if (first) {
+      setProvider(first.name);
+      setModel(first.default_model);
     }
   }, [providers, configured, provider]);
 

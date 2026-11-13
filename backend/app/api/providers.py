@@ -1,4 +1,4 @@
-"""Provider status, connectivity tests and per-account chat preferences."""
+"""Model connections of the signed-in account: status, tests and model lists."""
 
 from __future__ import annotations
 
@@ -10,42 +10,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_db
-from app.deps import current_admin, current_user
-from app.llm.catalog import EMBEDDING_PROVIDERS, PROVIDERS
-from app.llm.factory import DEFAULT_PROVIDER, registry
+from app.deps import current_user
+from app.llm.catalog import EMBEDDING_PROVIDERS
+from app.llm.factory import registry
 from app.llm.local_embeddings import local_embeddings_available
 from app.llm.schemas import NoProviderAvailable, ProviderError
 from app.logging_config import get_logger
 from app.models import User
-from app.schemas import PreferencesIn, ProviderTestOut
+from app.schemas import ProviderTestOut
 from app.services import users as user_service
 from app.services.embeddings import EmbeddingService
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api", tags=["providers"])
 CurrentUser = Depends(current_user)
-CurrentAdmin = Depends(current_admin)
-
-
-def _provider_or_404(provider: str) -> str:
-    name = (provider or "").strip().lower()
-    if name not in PROVIDERS:
-        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
-    return name
 
 
 def _degraded_banner(configured: bool) -> str | None:
     if configured:
         return None
     return (
-        "No chat provider is configured. Ask an administrator to assign a DeepSeek or Qwen "
-        "API key, or set QWEN_LOCAL_BASE_URL to use a local Qwen model."
+        "No models are connected to your account. Ask an administrator to add a "
+        "connection (name, address, key, model) in /admin → Users."
     )
 
 
-def _test_payload(provider: str, health: Any, models: list[str]) -> ProviderTestOut:
+def _test_payload(name: str, health: Any, models: list[str]) -> ProviderTestOut:
     return ProviderTestOut(
-        provider=provider,
+        provider=name,
         ok=health.ok,
         message=health.message,
         latency_ms=health.latency_ms,
@@ -58,15 +50,11 @@ async def list_providers(
     db: AsyncSession = Depends(get_db), user: User = CurrentUser
 ) -> dict:
     views = await registry.list_providers(db, user)
-    prefs = await registry.preferences(db)
-    configured = any(view.configured for view in views)
     return {
         "providers": [view.to_dict() for view in views],
-        "preferences": prefs,
         "embedding_providers": await registry.embedding_options(),
-        "chat_available": configured,
-        "degraded_banner": _degraded_banner(configured),
-        "default_provider": DEFAULT_PROVIDER,
+        "chat_available": bool(views),
+        "degraded_banner": _degraded_banner(bool(views)),
     }
 
 
@@ -74,64 +62,50 @@ async def list_providers(
 async def test_provider(
     db: AsyncSession = Depends(get_db), user: User = CurrentUser
 ) -> ProviderTestOut:
-    """Test the preferred provider (kept for backwards compatibility)."""
-    prefs = await registry.preferences(db)
-    name = _provider_or_404(str(prefs.get("provider") or DEFAULT_PROVIDER))
-    view = await registry.provider_view(db, user, name)
-    if not view.configured:
-        return ProviderTestOut(
-            provider=name, ok=False, message=registry.missing_message(name), models=view.models
-        )
+    """Test the first connected model (kept for backwards compatibility)."""
+    views = await registry.list_providers(db, user)
+    if not views:
+        return ProviderTestOut(provider="", ok=False, message=_degraded_banner(False) or "")
+    name = views[0].name
     health = await registry.test(db, user, name)
-    return _test_payload(name, health, view.models)
+    return _test_payload(name, health, views[0].models)
 
 
 @router.post("/providers/{provider}/test", response_model=ProviderTestOut)
 async def test_named_provider(
     provider: str, db: AsyncSession = Depends(get_db), user: User = CurrentUser
 ) -> ProviderTestOut:
-    name = _provider_or_404(provider)
-    view = await registry.provider_view(db, user, name)
-    if not view.configured:
-        return ProviderTestOut(
-            provider=name, ok=False, message=registry.missing_message(name), models=view.models
-        )
-    health = await registry.test(db, user, name)
-    return _test_payload(name, health, view.models)
-
-
-@router.get("/providers/models")
-async def provider_models() -> dict[str, Any]:
-    meta = PROVIDERS[DEFAULT_PROVIDER]
-    return {"provider": DEFAULT_PROVIDER, "models": list(meta.models), "dynamic": False}
+    view = await registry.provider_view(db, user, provider)
+    if view is None:
+        raise HTTPException(status_code=404, detail=f"Model connection not found: {provider}")
+    health = await registry.test(db, user, provider)
+    return _test_payload(view.name, health, view.models)
 
 
 @router.get("/providers/{provider}/models")
 async def named_provider_models(
     provider: str, db: AsyncSession = Depends(get_db), user: User = CurrentUser
 ) -> dict[str, Any]:
-    """Curated catalogue merged with the live model list when available."""
-    name = _provider_or_404(provider)
-    meta = PROVIDERS[name]
-    view = await registry.provider_view(db, user, name)
-    base = {"provider": name, "configured": view.configured}
-    if not view.configured:
-        return {**base, "models": list(meta.models), "dynamic": False}
-    client = await registry.get_provider(db, user, name)
+    """The connected model merged with the live model list when available."""
+    view = await registry.provider_view(db, user, provider)
+    if view is None:
+        raise HTTPException(status_code=404, detail=f"Model connection not found: {provider}")
+    base = {"provider": view.name, "configured": True}
+    client = await registry.get_provider(db, user, provider)
     if client is None:
-        return {**base, "models": list(meta.models), "dynamic": False}
+        return {**base, "models": list(view.models), "dynamic": False}
     try:
         live = await asyncio.wait_for(client.list_models(), timeout=15)
     except (ProviderError, asyncio.TimeoutError) as exc:
         message = getattr(exc, "message", "model listing timed out")
-        logger.info("Model listing for %s failed: %s", name, message)
+        logger.info("Model listing for %s failed: %s", provider, message)
         return {
             **base,
-            "models": list(meta.models),
+            "models": list(view.models),
             "dynamic": False,
             "error": message,
         }
-    merged = list(dict.fromkeys([*live, *meta.models]))
+    merged = list(dict.fromkeys([*live, *view.models]))
     return {**base, "models": merged, "dynamic": True}
 
 
@@ -169,41 +143,13 @@ async def get_settings(
     db: AsyncSession = Depends(get_db), user: User = CurrentUser
 ) -> dict:
     views = await registry.list_providers(db, user)
-    prefs = await registry.preferences(db)
-    default_provider = str(prefs.get("provider") or DEFAULT_PROVIDER)
+    connections = await user_service.list_connections(db, user)
     return {
         "providers": [view.to_dict() for view in views],
-        "preferences": prefs,
         "embedding_providers": await registry.embedding_options(),
         "secret_key_insecure": settings.secret_key_is_insecure,
         "max_upload_mb": settings.max_upload_mb,
-        "default_provider": default_provider,
-        "default_model": prefs.get("model")
-        or user_service.provider_model(user, default_provider),
         "auth_enabled": True,
-        "user": user_service.user_to_dict(user),
+        "user": user_service.user_to_dict(user, connections=connections),
         "admin_password_is_default": settings.admin_password_is_default,
     }
-
-
-@router.put("/settings/preferences")
-async def save_preferences(
-    payload: PreferencesIn,
-    db: AsyncSession = Depends(get_db),
-    user: User = CurrentAdmin,
-) -> dict:
-    values = payload.model_dump(exclude_none=True)
-    provider = values.get("provider")
-    if provider is not None and provider not in PROVIDERS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown provider '{provider}'. Available: {', '.join(PROVIDERS)}",
-        )
-    if values.get("embedding_provider") and values["embedding_provider"] not in EMBEDDING_PROVIDERS:
-        raise HTTPException(status_code=400, detail="Only local embeddings are available")
-    try:
-        preferences = await registry.save_preferences(db, values)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await db.commit()
-    return {"preferences": preferences, "reindex_required": False}
