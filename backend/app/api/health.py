@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import __version__
 from app.config import settings
 from app.db import get_db
-from app.llm.factory import PROVIDER_NAME, registry
+from app.llm.catalog import PROVIDERS
+from app.llm.factory import DEFAULT_PROVIDER, registry
 from app.llm.local_embeddings import local_embeddings_available
 from app.logging_config import get_logger
 from app.services.vectorstore import vector_store
@@ -51,21 +52,30 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
     qdrant_ok, qdrant_message = await vector_store.health()
     redis_ok, redis_message = await _check_redis()
 
-    system_key = bool(settings.deepseek_api_key)
     embedding_configured = ["local"] if local_embeddings_available() else []
-    view = await registry.provider_view(db, None)
+    views = await registry.list_providers(db, None)
+    prefs = await registry.preferences(db)
+    configured = [view.name for view in views if view.configured]
+    default_provider = str(prefs.get("provider") or DEFAULT_PROVIDER)
+    default_model = str(prefs.get("model") or settings.llm_model)
 
     warnings: list[str] = []
     banner: str | None = None
     if settings.secret_key_is_insecure:
         warnings.append(
-            "APP_SECRET_KEY is unset/insecure: stored DeepSeek keys are weakly encrypted. "
+            "APP_SECRET_KEY is unset/insecure: stored provider keys are weakly encrypted. "
             "Set a long random value in .env."
         )
     if settings.admin_password_is_default:
         warnings.append(
             "The bootstrap administrator still uses the default password - change it after login."
         )
+    if not configured:
+        warnings.append(
+            "No chat provider is configured: no DeepSeek/Qwen API key is set and "
+            "QWEN_LOCAL_BASE_URL is empty."
+        )
+        banner = "No chat provider is configured - administrators can assign keys in /admin."
     if not embedding_configured:
         warnings.append(
             "Local embeddings are unavailable - document search (RAG) is disabled. "
@@ -91,11 +101,11 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
             "redis": {"ok": redis_ok, "message": redis_message},
         },
         "providers": {
-            "configured": [PROVIDER_NAME] if system_key else [],
+            "configured": configured,
             "embedding_configured": embedding_configured,
-            "default_provider": PROVIDER_NAME,
-            "default_model": settings.llm_model,
-            "details": [view.to_dict()],
+            "default_provider": default_provider if default_provider in PROVIDERS else DEFAULT_PROVIDER,
+            "default_model": default_model,
+            "details": [view.to_dict() for view in views],
             "auth": "required",
         },
         "banner": banner,

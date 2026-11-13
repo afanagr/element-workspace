@@ -1,8 +1,9 @@
-"""Accounts, sessions (bearer tokens) and per-user DeepSeek keys.
+"""Accounts, sessions (bearer tokens) and per-user provider credentials.
 
 Users are created by an administrator: there is no public sign-up. Passwords are
 hashed with PBKDF2-HMAC-SHA256, tokens are random strings of which only the
-SHA-256 digest is persisted, and DeepSeek keys are encrypted with Fernet.
+SHA-256 digest is persisted, and provider API keys (DeepSeek, Qwen) are
+encrypted with Fernet.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.llm.catalog import CLOUD_PROVIDERS, PROVIDERS
 from app.logging_config import get_logger
 from app.models import AuthToken, ChatMessage, ChatSession, Node, Operation, User, utcnow
 from app.security import (
@@ -60,13 +62,77 @@ def validate_password(value: str) -> str:
     return password
 
 
-def deepseek_key(user: User | None) -> str:
-    """The user's own DeepSeek key, falling back to the deployment-wide key."""
+# Provider credential columns on the user row. Cloud keys are issued per account;
+# the local Qwen server is configured deployment-wide and needs no key.
+_USER_KEY_COLUMNS: dict[str, str] = {
+    "deepseek": "deepseek_api_key_enc",
+    "qwen": "qwen_api_key_enc",
+}
+
+_ENV_KEY_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "deepseek": ("deepseek_api_key",),
+    "qwen": ("qwen_api_key", "dashscope_api_key"),
+}
+
+
+def normalize_provider(provider: str | None) -> str:
+    name = (provider or "").strip().lower()
+    return name if name in PROVIDERS else "deepseek"
+
+
+def provider_key(user: User | None, provider: str) -> str:
+    """Resolve the API key for one provider.
+
+    Order of precedence: the key assigned to the account, then the
+    deployment-wide environment fallback. The local Qwen endpoint may need no
+    key at all, in which case an empty string is returned.
+    """
+    name = normalize_provider(provider)
+    if name not in _USER_KEY_COLUMNS:
+        if name == "qwen-local":
+            return (settings.qwen_local_api_key or "").strip()
+        return ""
     if user is not None:
-        own = decrypt_secret(user.deepseek_api_key_enc)
+        own = decrypt_secret(getattr(user, _USER_KEY_COLUMNS[name], None))
         if own:
             return own
-    return settings.deepseek_api_key
+    for attribute in _ENV_KEY_FALLBACKS.get(name, ()):
+        value = (getattr(settings, attribute, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def provider_model(user: User | None, provider: str) -> str:
+    name = normalize_provider(provider)
+    if name == "qwen":
+        if user is not None and user.qwen_model:
+            return user.qwen_model
+        return settings.qwen_model or "qwen-plus"
+    if name == "qwen-local":
+        return settings.qwen_local_model or "qwen2.5:7b-instruct"
+    return deepseek_model(user)
+
+
+def personal_key(user: User | None, provider: str) -> str:
+    """The key stored on the account itself (ignores environment fallbacks)."""
+    column = _USER_KEY_COLUMNS.get(normalize_provider(provider))
+    if user is None or not column:
+        return ""
+    return decrypt_secret(getattr(user, column, None))
+
+
+def has_personal_key(user: User | None, provider: str) -> bool:
+    return bool(personal_key(user, provider))
+
+
+def has_any_personal_key(user: User | None) -> bool:
+    return any(has_personal_key(user, provider) for provider in CLOUD_PROVIDERS)
+
+
+def deepseek_key(user: User | None) -> str:
+    """The user's own DeepSeek key, falling back to the deployment-wide key."""
+    return provider_key(user, "deepseek")
 
 
 def deepseek_model(user: User | None) -> str:
@@ -105,6 +171,8 @@ async def create_user(
     role: str = ROLE_USER,
     deepseek_api_key: str | None = None,
     deepseek_model: str | None = None,
+    qwen_api_key: str | None = None,
+    qwen_model: str | None = None,
 ) -> User:
     clean = normalize_username(username)
     if await get_by_username(db, clean) is not None:
@@ -119,7 +187,10 @@ async def create_user(
         is_active=True,
         deepseek_api_key_enc=encrypt_secret(deepseek_api_key.strip()) if deepseek_api_key else None,
         deepseek_model=(deepseek_model or "").strip()[:64] or None,
+        qwen_api_key_enc=encrypt_secret(qwen_api_key.strip()) if qwen_api_key else None,
+        qwen_model=(qwen_model or "").strip()[:64] or None,
     )
+
     db.add(user)
     await db.flush()
     return user
@@ -145,6 +216,9 @@ async def update_user(
     deepseek_api_key: str | None = None,
     deepseek_model: str | None = None,
     clear_deepseek_key: bool = False,
+    qwen_api_key: str | None = None,
+    qwen_model: str | None = None,
+    clear_qwen_key: bool = False,
 ) -> User:
     if role is not None:
         if role not in ROLES:
@@ -168,6 +242,14 @@ async def update_user(
         user.deepseek_api_key_enc = encrypt_secret(value) if value else None
     if deepseek_model is not None:
         user.deepseek_model = deepseek_model.strip()[:64] or None
+    if clear_qwen_key:
+        user.qwen_api_key_enc = None
+    elif qwen_api_key is not None:
+        value = qwen_api_key.strip()
+        user.qwen_api_key_enc = encrypt_secret(value) if value else None
+    if qwen_model is not None:
+        user.qwen_model = qwen_model.strip()[:64] or None
+
     user.updated_at = utcnow()
     await db.flush()
     return user
@@ -297,7 +379,7 @@ async def ensure_admin(db: AsyncSession) -> User | None:
 
 # ------------------------------------------------------------------ helpers
 def user_to_dict(user: User, *, stats: dict[str, int] | None = None) -> dict:
-    key = decrypt_secret(user.deepseek_api_key_enc)
+    keys = {provider: personal_key(user, provider) for provider in CLOUD_PROVIDERS}
     payload: dict = {
         "id": str(user.id),
         "username": user.username,
@@ -305,13 +387,23 @@ def user_to_dict(user: User, *, stats: dict[str, int] | None = None) -> dict:
         "role": user.role,
         "is_admin": user.is_admin,
         "is_active": user.is_active,
-        "deepseek_configured": bool(key),
-        "deepseek_key_masked": mask_secret(key),
+        "deepseek_configured": bool(keys.get("deepseek")),
+        "deepseek_key_masked": mask_secret(keys.get("deepseek")),
         "deepseek_model": user.deepseek_model or "",
+        "qwen_configured": bool(keys.get("qwen")),
+        "qwen_key_masked": mask_secret(keys.get("qwen")),
+        "qwen_model": user.qwen_model or "",
+        "provider_keys": {
+            provider: {
+                "configured": bool(key),
+                "key_masked": mask_secret(key),
+                "model": provider_model(user, provider),
+            }
+            for provider, key in keys.items()
+        },
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "updated_at": user.updated_at.isoformat() if user.updated_at else None,
     }
     if stats is not None:
         payload["stats"] = stats
     return payload
-

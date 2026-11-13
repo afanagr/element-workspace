@@ -40,17 +40,36 @@ class Settings(BaseSettings):
     workspace_dir: Path = Path("/data/workspace")
 
     # ---------------------------------------------------------------- llm
-    # DeepSeek is the only chat provider. The global key is an optional
-    # fallback for accounts that were not issued an individual key.
+    # Chat providers: DeepSeek (cloud) plus Qwen in two flavours - the cloud
+    # DashScope API and a local OpenAI-compatible server (Ollama, vLLM, ...).
+    # Individual accounts normally get their own key from an administrator; the
+    # values below are deployment-wide fallbacks and endpoint overrides.
     llm_provider: str = "deepseek"
     llm_model: str = "deepseek-chat"
     deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+
+    # Qwen cloud (Alibaba Cloud DashScope, OpenAI-compatible mode).
+    qwen_api_key: str = ""
+    # Accepted alias for deployments that already export DASHSCOPE_API_KEY.
+    dashscope_api_key: str = ""
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen-plus"
+
+    # Local Qwen: leave QWEN_LOCAL_BASE_URL empty to disable the provider.
+    # Ollama: http://localhost:11434/v1 (inside Docker: http://host.docker.internal:11434/v1)
+    # vLLM/LM Studio: http://localhost:8000/v1
+    qwen_local_base_url: str = ""
+    qwen_local_api_key: str = ""
+    qwen_local_model: str = "qwen2.5:7b-instruct"
+
     llm_request_timeout: float = 180.0
     llm_max_retries: int = 2
     max_agent_steps: int = 8
 
     # ---------------------------------------------------------- embeddings
-    # DeepSeek has no embeddings API, so vectors are always computed locally.
+    # DeepSeek/Qwen chat endpoints expose no embedding API in this setup, so
+    # vectors are always computed locally.
     embedding_provider: str = "local"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     local_embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"

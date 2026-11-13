@@ -15,8 +15,10 @@ export function SettingsPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null);
+  const [test, setTest] = useState<Record<string, { ok: boolean; message: string }>>({});
   const [embeddingTest, setEmbeddingTest] = useState<{ ok: boolean; message: string } | null>(null);
+  const [defaultProvider, setDefaultProvider] = useState('deepseek');
+  const [defaultModel, setDefaultModel] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
@@ -34,16 +36,22 @@ export function SettingsPanel() {
     void load();
   }, [load]);
 
-  const deepseek = settings?.providers.find((item) => item.name === 'deepseek') ?? null;
+  useEffect(() => {
+    if (!settings) return;
+    setDefaultProvider(settings.default_provider);
+    setDefaultModel(settings.default_model);
+  }, [settings]);
 
-  const runTest = async () => {
+  const providers = settings?.providers ?? [];
+
+  const runTest = async (provider: string) => {
     setBusy(true);
     setError(null);
     try {
-      const result = await api.testProvider('deepseek');
-      setTest({ ok: result.ok, message: result.message });
+      const result = await api.testProvider(provider);
+      setTest((prev) => ({ ...prev, [provider]: { ok: result.ok, message: result.message } }));
     } catch {
-      setTest({ ok: false, message: t('settings.testFailed') });
+      setTest((prev) => ({ ...prev, [provider]: { ok: false, message: t('settings.testFailed') } }));
     } finally {
       setBusy(false);
     }
@@ -61,6 +69,24 @@ export function SettingsPanel() {
       });
     } catch (err) {
       setEmbeddingTest({ ok: false, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveDefaults = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api.savePreferences({
+        provider: defaultProvider,
+        model: defaultModel.trim() || undefined,
+      });
+      setNotice(t('settings.defaultsSaved'));
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -139,34 +165,88 @@ export function SettingsPanel() {
       ) : null}
 
       <section className="panel rounded-xl p-4">
-        <h2 className="mb-1 text-sm font-semibold">{t('settings.deepseekTitle')}</h2>
+        <h2 className="mb-1 text-sm font-semibold">{t('settings.providersTitle')}</h2>
         <p className="mb-3 text-[11px] text-slate-500 dark:text-zinc-400">
-          {t('settings.deepseekNote')}
+          {t('settings.providersNote')}
         </p>
-        <dl className="grid gap-2 text-xs sm:grid-cols-2">
-          <div>
-            <dt className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
-              {t('settings.keyStatus')}
-            </dt>
-            <dd className="font-medium">
-              {auth.user.deepseek_configured ? (
-                <>
-                  ✓ {t('settings.keyAssigned')}{' '}
-                  <span className="font-mono text-[11px]">{auth.user.deepseek_key_masked}</span>
-                </>
-              ) : (
-                <span className="text-amber-600 dark:text-amber-400">
-                  {t('settings.keyMissing')}
-                </span>
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
-              {t('settings.model')}
-            </dt>
-            <dd className="font-medium">{settings?.default_model || deepseek?.default_model}</dd>
-          </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {providers.map((provider) => {
+            const result = test[provider.name];
+            return (
+              <div
+                key={provider.name}
+                className="rounded-lg border border-slate-200 p-3 text-xs dark:border-zinc-700"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="font-semibold">{provider.label}</div>
+                    <div className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
+                      {provider.local ? t('settings.localModel') : t('settings.cloudModel')}
+                    </div>
+                  </div>
+                  <span
+                    className={
+                      provider.configured
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-amber-600 dark:text-amber-400'
+                    }
+                  >
+                    {provider.configured
+                      ? `✓ ${t('settings.keyAssigned')}`
+                      : provider.local
+                        ? t('settings.localDisabled')
+                        : t('settings.keyMissing')}
+                  </span>
+                </div>
+                <dl className="mt-2 grid gap-1">
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500 dark:text-zinc-400">{t('settings.model')}</dt>
+                    <dd className="font-mono text-[11px]">{provider.default_model}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-slate-500 dark:text-zinc-400">{t('settings.keyStatus')}</dt>
+                    <dd className="font-mono text-[11px]">
+                      {provider.api_key_masked ||
+                        (provider.requires_api_key === false ? t('settings.noKeyNeeded') : '—')}
+                    </dd>
+                  </div>
+                  {provider.base_url ? (
+                    <div className="flex justify-between gap-2">
+                      <dt className="text-slate-500 dark:text-zinc-400">{t('settings.endpoint')}</dt>
+                      <dd
+                        className="max-w-[60%] truncate font-mono text-[11px]"
+                        title={provider.base_url}
+                      >
+                        {provider.base_url}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+                <button
+                  type="button"
+                  className="btn mt-2"
+                  disabled={busy}
+                  onClick={() => void runTest(provider.name)}
+                >
+                  {busy ? t('settings.checking') : t('settings.testProvider')}
+                </button>
+                {result ? (
+                  <p
+                    className={`mt-1 text-[11px] ${
+                      result.ok
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-rose-600 dark:text-rose-400'
+                    }`}
+                  >
+                    {result.ok ? '✓' : '✕'} {result.message}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+
+        <dl className="mt-4 grid gap-2 text-xs sm:grid-cols-3">
           <div>
             <dt className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
               {t('settings.embeddingProvider')}
@@ -182,25 +262,21 @@ export function SettingsPanel() {
             </dt>
             <dd className="font-medium">{settings?.max_upload_mb ?? 0} MB</dd>
           </div>
+          <div>
+            <dt className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
+              {t('settings.defaultModel')}
+            </dt>
+            <dd className="font-medium">
+              {settings?.default_provider} · {settings?.default_model}
+            </dd>
+          </div>
         </dl>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button type="button" className="btn" disabled={busy} onClick={() => void runTest()}>
-            {busy ? t('settings.checking') : t('settings.checkDeepseek')}
-          </button>
           <button type="button" className="btn" disabled={busy} onClick={() => void runEmbeddingTest()}>
             {t('settings.testEmbeddings')}
           </button>
         </div>
-        {test ? (
-          <p
-            className={`mt-2 text-[11px] ${
-              test.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
-            }`}
-          >
-            {test.ok ? '✓' : '✕'} {test.message}
-          </p>
-        ) : null}
         {embeddingTest ? (
           <p
             className={`mt-1 text-[11px] ${
@@ -213,6 +289,57 @@ export function SettingsPanel() {
           </p>
         ) : null}
       </section>
+
+      {auth.user.is_admin ? (
+        <section className="panel rounded-xl p-4">
+          <h2 className="mb-1 text-sm font-semibold">{t('settings.defaultsTitle')}</h2>
+          <p className="mb-3 text-[11px] text-slate-500 dark:text-zinc-400">
+            {t('settings.defaultsNote')}
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="text-xs">
+              <span className="mb-1 block text-slate-500 dark:text-zinc-400">
+                {t('app.activeProvider')}
+              </span>
+              <select
+                className="input"
+                value={defaultProvider}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setDefaultProvider(next);
+                  const meta = providers.find((item) => item.name === next);
+                  setDefaultModel(meta?.default_model || '');
+                }}
+              >
+                {providers.map((provider) => (
+                  <option key={provider.name} value={provider.name}>
+                    {provider.label}
+                    {provider.configured ? '' : ` — ${t('settings.keyMissing')}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs">
+              <span className="mb-1 block text-slate-500 dark:text-zinc-400">
+                {t('settings.model')}
+              </span>
+              <input
+                className="input"
+                value={defaultModel}
+                onChange={(event) => setDefaultModel(event.target.value)}
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary mt-3"
+            disabled={busy}
+            onClick={() => void saveDefaults()}
+          >
+            {t('common.save')}
+          </button>
+        </section>
+      ) : null}
 
       <section className="panel rounded-xl p-4">
         <h2 className="mb-3 text-sm font-semibold">{t('settings.passwordTitle')}</h2>

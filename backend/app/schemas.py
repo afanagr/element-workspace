@@ -206,7 +206,12 @@ class UserOut(ORMModel):
     deepseek_configured: bool = False
     deepseek_key_masked: str = ""
     deepseek_model: str = ""
+    qwen_configured: bool = False
+    qwen_key_masked: str = ""
+    qwen_model: str = ""
+    provider_keys: dict[str, dict[str, Any]] = Field(default_factory=dict)
     created_at: datetime | None = None
+
     updated_at: datetime | None = None
     stats: UserStatsOut | None = None
 
@@ -229,6 +234,8 @@ class UserCreateIn(BaseModel):
     role: Literal["admin", "user"] = "user"
     deepseek_api_key: str | None = Field(default=None, max_length=200)
     deepseek_model: str | None = Field(default=None, max_length=64)
+    qwen_api_key: str | None = Field(default=None, max_length=200)
+    qwen_model: str | None = Field(default=None, max_length=64)
 
 
 class UserUpdateIn(BaseModel):
@@ -239,6 +246,10 @@ class UserUpdateIn(BaseModel):
     deepseek_api_key: str | None = Field(default=None, max_length=200)
     deepseek_model: str | None = Field(default=None, max_length=64)
     clear_deepseek_key: bool = False
+    qwen_api_key: str | None = Field(default=None, max_length=200)
+    qwen_model: str | None = Field(default=None, max_length=64)
+    clear_qwen_key: bool = False
+
 
 
 class AdminProjectOut(BaseModel):

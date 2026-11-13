@@ -57,6 +57,8 @@ class User(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     deepseek_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     deepseek_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    qwen_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    qwen_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     @property
     def is_admin(self) -> bool:

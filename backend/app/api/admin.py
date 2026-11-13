@@ -78,7 +78,10 @@ async def create_user(
         role=payload.role,
         deepseek_api_key=payload.deepseek_api_key,
         deepseek_model=payload.deepseek_model,
+        qwen_api_key=payload.qwen_api_key,
+        qwen_model=payload.qwen_model,
     )
+
     await db.commit()
     logger.info("Admin '%s' created user '%s'", admin.username, user.username)
     return _public(user, {})
@@ -102,7 +105,11 @@ async def update_user(
         deepseek_api_key=payload.deepseek_api_key,
         deepseek_model=payload.deepseek_model,
         clear_deepseek_key=payload.clear_deepseek_key,
+        qwen_api_key=payload.qwen_api_key,
+        qwen_model=payload.qwen_model,
+        clear_qwen_key=payload.clear_qwen_key,
     )
+
     await db.commit()
     return _public(user, await _stats(db))
 
@@ -177,7 +184,7 @@ async def overview(db: AsyncSession = Depends(get_db), admin: User = CurrentAdmi
         "users": len(users),
         "active_users": sum(1 for user in users if user.is_active),
         "admins": sum(1 for user in users if user.is_admin),
-        "users_without_key": sum(1 for user in users if not user.deepseek_api_key_enc),
+        "users_without_key": sum(1 for user in users if not user_service.has_any_personal_key(user)),
         **totals,
     }
 

@@ -14,6 +14,8 @@ interface Draft {
   role: UserRole;
   deepseek_api_key: string;
   deepseek_model: string;
+  qwen_api_key: string;
+  qwen_model: string;
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -23,7 +25,10 @@ const EMPTY_DRAFT: Draft = {
   role: 'user',
   deepseek_api_key: '',
   deepseek_model: 'deepseek-chat',
+  qwen_api_key: '',
+  qwen_model: 'qwen-plus',
 };
+
 
 export function AdminPanel() {
   const { t } = useI18n();
@@ -81,6 +86,8 @@ export function AdminPanel() {
         role: draft.role,
         deepseek_api_key: draft.deepseek_api_key.trim() || null,
         deepseek_model: draft.deepseek_model.trim() || null,
+        qwen_api_key: draft.qwen_api_key.trim() || null,
+        qwen_model: draft.qwen_model.trim() || null,
       });
       setDraft(EMPTY_DRAFT);
     }, t('admin.noticeUserCreated'));
@@ -94,6 +101,8 @@ export function AdminPanel() {
       role: user.role,
       deepseek_api_key: '',
       deepseek_model: user.deepseek_model || 'deepseek-chat',
+      qwen_api_key: '',
+      qwen_model: user.qwen_model || 'qwen-plus',
     });
   };
 
@@ -105,8 +114,12 @@ export function AdminPanel() {
         password: editDraft.password || undefined,
         role: editDraft.role,
         deepseek_model: editDraft.deepseek_model.trim() || null,
+        qwen_model: editDraft.qwen_model.trim() || null,
         ...(editDraft.deepseek_api_key.trim()
           ? { deepseek_api_key: editDraft.deepseek_api_key.trim() }
+          : {}),
+        ...(editDraft.qwen_api_key.trim()
+          ? { qwen_api_key: editDraft.qwen_api_key.trim() }
           : {}),
       });
       setEditing(null);
@@ -241,6 +254,18 @@ export function AdminPanel() {
             value={draft.deepseek_model}
             onChange={(event) => setDraft({ ...draft, deepseek_model: event.target.value })}
           />
+          <input
+            className="input"
+            placeholder={t('admin.qwenKey')}
+            value={draft.qwen_api_key}
+            onChange={(event) => setDraft({ ...draft, qwen_api_key: event.target.value })}
+          />
+          <input
+            className="input"
+            placeholder={t('admin.qwenModel')}
+            value={draft.qwen_model}
+            onChange={(event) => setDraft({ ...draft, qwen_model: event.target.value })}
+          />
         </div>
         <div className="mt-3 flex items-center gap-2">
           <button
@@ -305,6 +330,22 @@ export function AdminPanel() {
                 setEditDraft({ ...editDraft, deepseek_model: event.target.value })
               }
             />
+            <input
+              className="input"
+              placeholder={
+                editing.qwen_configured
+                  ? `${t('admin.qwenKey')} (${editing.qwen_key_masked})`
+                  : t('admin.qwenKey')
+              }
+              value={editDraft.qwen_api_key}
+              onChange={(event) => setEditDraft({ ...editDraft, qwen_api_key: event.target.value })}
+            />
+            <input
+              className="input"
+              placeholder={t('admin.qwenModel')}
+              value={editDraft.qwen_model}
+              onChange={(event) => setEditDraft({ ...editDraft, qwen_model: event.target.value })}
+            />
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
@@ -333,6 +374,21 @@ export function AdminPanel() {
                 {t('admin.clearKey')}
               </button>
             ) : null}
+            {editing.qwen_configured ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() =>
+                  void run(async () => {
+                    await api.adminUpdateUser(editing.id, { clear_qwen_key: true });
+                    setEditing(null);
+                  }, t('admin.noticeUserSaved'))
+                }
+              >
+                {t('admin.clearQwenKey')}
+              </button>
+            ) : null}
           </div>
         </section>
       ) : null}
@@ -340,12 +396,13 @@ export function AdminPanel() {
 
       <section className="panel overflow-x-auto rounded-xl p-4">
         <h2 className="mb-3 text-sm font-semibold">{t('admin.usersTitle')}</h2>
-        <table className="w-full min-w-[720px] text-left text-xs">
+        <table className="w-full min-w-[860px] text-left text-xs">
           <thead className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">
             <tr>
               <th className="py-1">{t('admin.username')}</th>
               <th className="py-1">{t('admin.role')}</th>
               <th className="py-1">{t('admin.deepseekKey')}</th>
+              <th className="py-1">{t('admin.qwenKey')}</th>
               <th className="py-1">{t('admin.projects')}</th>
               <th className="py-1">{t('admin.files')}</th>
               <th className="py-1">{t('admin.status')}</th>
@@ -373,6 +430,18 @@ export function AdminPanel() {
                   {user.deepseek_model ? (
                     <div className="text-[10px] text-slate-500 dark:text-zinc-400">
                       {user.deepseek_model}
+                    </div>
+                  ) : null}
+                </td>
+                <td className="py-1.5">
+                  {user.qwen_configured ? (
+                    <span className="font-mono text-[11px]">{user.qwen_key_masked}</span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-400">{t('admin.noKey')}</span>
+                  )}
+                  {user.qwen_model ? (
+                    <div className="text-[10px] text-slate-500 dark:text-zinc-400">
+                      {user.qwen_model}
                     </div>
                   ) : null}
                 </td>

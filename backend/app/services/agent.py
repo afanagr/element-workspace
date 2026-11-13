@@ -162,7 +162,9 @@ async def run_agent(
     await db.commit()
 
     try:
-        candidates = await registry.candidates(db, user, request.model)
+        candidates = await registry.candidates(
+            db, user, request.model, provider=request.provider
+        )
     except NoProviderAvailable as exc:
         yield {
             "type": "error",
