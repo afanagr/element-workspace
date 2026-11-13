@@ -67,11 +67,13 @@ def validate_password(value: str) -> str:
 _USER_KEY_COLUMNS: dict[str, str] = {
     "deepseek": "deepseek_api_key_enc",
     "qwen": "qwen_api_key_enc",
+    "qwen-local": "qwen_local_api_key_enc",
 }
 
 _ENV_KEY_FALLBACKS: dict[str, tuple[str, ...]] = {
     "deepseek": ("deepseek_api_key",),
     "qwen": ("qwen_api_key", "dashscope_api_key"),
+    "qwen-local": ("qwen_local_api_key",),
 }
 
 
@@ -106,12 +108,86 @@ def provider_key(user: User | None, provider: str) -> str:
 def provider_model(user: User | None, provider: str) -> str:
     name = normalize_provider(provider)
     if name == "qwen":
-        if user is not None and user.qwen_model:
+        if user is not None and getattr(user, "qwen_model", None):
             return user.qwen_model
         return settings.qwen_model or "qwen-plus"
     if name == "qwen-local":
+        if user is not None and getattr(user, "qwen_local_model", None):
+            return user.qwen_local_model
         return settings.qwen_local_model or "qwen2.5:7b-instruct"
     return deepseek_model(user)
+
+
+_MODEL_COLUMNS: dict[str, str] = {
+    "deepseek": "deepseek_model",
+    "qwen": "qwen_model",
+    "qwen-local": "qwen_local_model",
+}
+
+
+def provider_model_override(user: User | None, provider: str) -> str:
+    """The model stored on the account itself ("" means "use the default")."""
+    column = _MODEL_COLUMNS.get(normalize_provider(provider))
+    if user is None or not column:
+        return ""
+    return (getattr(user, column, None) or "").strip()
+
+
+def default_provider_endpoint(provider: str) -> str:
+    name = normalize_provider(provider)
+    if name == "qwen":
+        return (settings.qwen_base_url or "").strip()
+    if name == "qwen-local":
+        return (settings.qwen_local_base_url or "").strip()
+    return (settings.deepseek_base_url or "").strip()
+
+
+def provider_endpoint_override(user: User | None, provider: str) -> str:
+    """The endpoint stored on the account itself ("" means "use the default")."""
+    if user is None:
+        return ""
+    mapping = getattr(user, "provider_base_urls", None) or {}
+    value = mapping.get(normalize_provider(provider))
+    return value.strip() if isinstance(value, str) else ""
+
+
+def provider_endpoint(user: User | None, provider: str) -> str:
+    """Effective endpoint: per-account override, then the deployment default."""
+    return provider_endpoint_override(user, provider) or default_provider_endpoint(provider)
+
+
+def provider_is_available(user: User | None, provider: str) -> bool:
+    meta = PROVIDERS.get(normalize_provider(provider))
+    if meta is not None and meta.local:
+        return bool(provider_endpoint(user, provider))
+    return bool(provider_key(user, provider))
+
+
+def provider_source(user: User | None, provider: str) -> str:
+    name = normalize_provider(provider)
+    if has_personal_key(user, name):
+        return "user"
+    meta = PROVIDERS.get(name)
+    if meta is not None and meta.local and provider_endpoint(user, name):
+        return "local"
+    if provider_key(user, name):
+        return "environment"
+    return "none"
+
+
+def sanitize_provider_endpoints(values: dict[str, str] | None) -> dict[str, str]:
+    """Keep known providers only, trim values and drop empty entries."""
+    if not values:
+        return {}
+    cleaned: dict[str, str] = {}
+    for provider, raw in values.items():
+        name = (provider or "").strip().lower()
+        if name not in PROVIDERS or not isinstance(raw, str):
+            continue
+        value = raw.strip()[:400]
+        if value:
+            cleaned[name] = value
+    return cleaned
 
 
 def personal_key(user: User | None, provider: str) -> str:
@@ -130,13 +206,18 @@ def has_any_personal_key(user: User | None) -> bool:
     return any(has_personal_key(user, provider) for provider in CLOUD_PROVIDERS)
 
 
+def has_any_provider(user: User | None) -> bool:
+    """True when at least one provider is usable (per-user or deployment-wide)."""
+    return any(provider_is_available(user, provider) for provider in PROVIDERS)
+
+
 def deepseek_key(user: User | None) -> str:
     """The user's own DeepSeek key, falling back to the deployment-wide key."""
     return provider_key(user, "deepseek")
 
 
 def deepseek_model(user: User | None) -> str:
-    if user is not None and user.deepseek_model:
+    if user is not None and getattr(user, "deepseek_model", None):
         return user.deepseek_model
     return settings.llm_model or "deepseek-chat"
 
@@ -173,6 +254,9 @@ async def create_user(
     deepseek_model: str | None = None,
     qwen_api_key: str | None = None,
     qwen_model: str | None = None,
+    qwen_local_api_key: str | None = None,
+    qwen_local_model: str | None = None,
+    provider_base_urls: dict[str, str] | None = None,
 ) -> User:
     clean = normalize_username(username)
     if await get_by_username(db, clean) is not None:
@@ -189,6 +273,11 @@ async def create_user(
         deepseek_model=(deepseek_model or "").strip()[:64] or None,
         qwen_api_key_enc=encrypt_secret(qwen_api_key.strip()) if qwen_api_key else None,
         qwen_model=(qwen_model or "").strip()[:64] or None,
+        qwen_local_api_key_enc=encrypt_secret(qwen_local_api_key.strip())
+        if qwen_local_api_key
+        else None,
+        qwen_local_model=(qwen_local_model or "").strip()[:64] or None,
+        provider_base_urls=sanitize_provider_endpoints(provider_base_urls) or None,
     )
 
     db.add(user)
@@ -219,6 +308,10 @@ async def update_user(
     qwen_api_key: str | None = None,
     qwen_model: str | None = None,
     clear_qwen_key: bool = False,
+    qwen_local_api_key: str | None = None,
+    qwen_local_model: str | None = None,
+    clear_qwen_local_key: bool = False,
+    provider_base_urls: dict[str, str] | None = None,
 ) -> User:
     if role is not None:
         if role not in ROLES:
@@ -249,6 +342,15 @@ async def update_user(
         user.qwen_api_key_enc = encrypt_secret(value) if value else None
     if qwen_model is not None:
         user.qwen_model = qwen_model.strip()[:64] or None
+    if clear_qwen_local_key:
+        user.qwen_local_api_key_enc = None
+    elif qwen_local_api_key is not None:
+        value = qwen_local_api_key.strip()
+        user.qwen_local_api_key_enc = encrypt_secret(value) if value else None
+    if qwen_local_model is not None:
+        user.qwen_local_model = qwen_local_model.strip()[:64] or None
+    if provider_base_urls is not None:
+        user.provider_base_urls = sanitize_provider_endpoints(provider_base_urls) or None
 
     user.updated_at = utcnow()
     await db.flush()
@@ -380,6 +482,23 @@ async def ensure_admin(db: AsyncSession) -> User | None:
 # ------------------------------------------------------------------ helpers
 def user_to_dict(user: User, *, stats: dict[str, int] | None = None) -> dict:
     keys = {provider: personal_key(user, provider) for provider in CLOUD_PROVIDERS}
+    providers = {
+        name: {
+            "configured": provider_is_available(user, name),
+            "key_configured": bool(personal_key(user, name)),
+            "key_masked": mask_secret(personal_key(user, name)),
+            "source": provider_source(user, name),
+            "model": provider_model(user, name),
+            "model_override": provider_model_override(user, name),
+            "default_model": provider_model(None, name),
+            "base_url": provider_endpoint(user, name),
+            "base_url_override": provider_endpoint_override(user, name),
+            "default_base_url": default_provider_endpoint(name),
+            "requires_api_key": meta.requires_api_key,
+            "local": meta.local,
+        }
+        for name, meta in PROVIDERS.items()
+    }
     payload: dict = {
         "id": str(user.id),
         "username": user.username,
@@ -393,14 +512,7 @@ def user_to_dict(user: User, *, stats: dict[str, int] | None = None) -> dict:
         "qwen_configured": bool(keys.get("qwen")),
         "qwen_key_masked": mask_secret(keys.get("qwen")),
         "qwen_model": user.qwen_model or "",
-        "provider_keys": {
-            provider: {
-                "configured": bool(key),
-                "key_masked": mask_secret(key),
-                "model": provider_model(user, provider),
-            }
-            for provider, key in keys.items()
-        },
+        "providers": providers,
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "updated_at": user.updated_at.isoformat() if user.updated_at else None,
     }

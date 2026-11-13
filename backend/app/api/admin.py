@@ -80,6 +80,9 @@ async def create_user(
         deepseek_model=payload.deepseek_model,
         qwen_api_key=payload.qwen_api_key,
         qwen_model=payload.qwen_model,
+        qwen_local_api_key=payload.qwen_local_api_key,
+        qwen_local_model=payload.qwen_local_model,
+        provider_base_urls=payload.provider_base_urls,
     )
 
     await db.commit()
@@ -108,6 +111,10 @@ async def update_user(
         qwen_api_key=payload.qwen_api_key,
         qwen_model=payload.qwen_model,
         clear_qwen_key=payload.clear_qwen_key,
+        qwen_local_api_key=payload.qwen_local_api_key,
+        qwen_local_model=payload.qwen_local_model,
+        clear_qwen_local_key=payload.clear_qwen_local_key,
+        provider_base_urls=payload.provider_base_urls,
     )
 
     await db.commit()
@@ -184,7 +191,7 @@ async def overview(db: AsyncSession = Depends(get_db), admin: User = CurrentAdmi
         "users": len(users),
         "active_users": sum(1 for user in users if user.is_active),
         "admins": sum(1 for user in users if user.is_admin),
-        "users_without_key": sum(1 for user in users if not user_service.has_any_personal_key(user)),
+        "users_without_key": sum(1 for user in users if not user_service.has_any_provider(user)),
         **totals,
     }
 

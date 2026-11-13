@@ -209,7 +209,7 @@ class UserOut(ORMModel):
     qwen_configured: bool = False
     qwen_key_masked: str = ""
     qwen_model: str = ""
-    provider_keys: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
     created_at: datetime | None = None
 
     updated_at: datetime | None = None
@@ -236,6 +236,9 @@ class UserCreateIn(BaseModel):
     deepseek_model: str | None = Field(default=None, max_length=64)
     qwen_api_key: str | None = Field(default=None, max_length=200)
     qwen_model: str | None = Field(default=None, max_length=64)
+    qwen_local_api_key: str | None = Field(default=None, max_length=200)
+    qwen_local_model: str | None = Field(default=None, max_length=64)
+    provider_base_urls: dict[str, str] | None = None
 
 
 class UserUpdateIn(BaseModel):
@@ -249,6 +252,10 @@ class UserUpdateIn(BaseModel):
     qwen_api_key: str | None = Field(default=None, max_length=200)
     qwen_model: str | None = Field(default=None, max_length=64)
     clear_qwen_key: bool = False
+    qwen_local_api_key: str | None = Field(default=None, max_length=200)
+    qwen_local_model: str | None = Field(default=None, max_length=64)
+    clear_qwen_local_key: bool = False
+    provider_base_urls: dict[str, str] | None = None
 
 
 

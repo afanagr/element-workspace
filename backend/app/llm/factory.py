@@ -124,25 +124,17 @@ class ProviderRegistry:
             )
         return PROVIDERS[name]
 
-    def base_url_for(self, provider: str) -> str | None:
-        meta = self.meta(provider)
-        if meta.local:
-            return (settings.qwen_local_base_url or "").strip() or None
-        if meta.name == "qwen":
-            return (settings.qwen_base_url or "").strip() or meta.base_url
-        if meta.name == "deepseek":
-            return (settings.deepseek_base_url or "").strip() or meta.base_url
-        return meta.base_url
+    def base_url_for(self, provider: str, user: User | None = None) -> str | None:
+        self.meta(provider)
+        return user_service.provider_endpoint(user, provider) or None
 
     # --------------------------------------------------------------- chat
     def api_key_for(self, user: User | None, provider: str = DEFAULT_PROVIDER) -> str:
         return user_service.provider_key(user, provider)
 
     def is_available(self, user: User | None, provider: str) -> bool:
-        meta = self.meta(provider)
-        if meta.local:
-            return bool((settings.qwen_local_base_url or "").strip())
-        return bool(self.api_key_for(user, provider))
+        self.meta(provider)
+        return user_service.provider_is_available(user, provider)
 
     def model_for(
         self,
@@ -156,8 +148,9 @@ class ProviderRegistry:
         meta = self.meta(provider)
         if meta.local:
             return (
-                "The local Qwen endpoint is not configured. Set QWEN_LOCAL_BASE_URL "
-                "(Ollama: http://localhost:11434/v1) and restart the backend."
+                "The local Qwen endpoint is not configured. Set the address in the user card "
+                "(or QWEN_LOCAL_BASE_URL on the server) and point it at Ollama/vLLM "
+                "(Ollama: http://host.docker.internal:11434/v1)."
             )
         if meta.name == "qwen":
             return (
@@ -181,7 +174,7 @@ class ProviderRegistry:
             raise NoProviderAvailable(
                 self.missing_message(provider), details={"provider": meta.name}
             )
-        base_url = self.base_url_for(provider)
+        base_url = self.base_url_for(provider, user)
         chosen = self.model_for(user, provider, model)
         cache_key = (meta.name, fingerprint(api_key), chosen, base_url)
         cached = self._chat.get(cache_key)
@@ -403,7 +396,7 @@ class ProviderRegistry:
             source=source,
             model=self.model_for(user, name),
             key=key,
-            base_url=self.base_url_for(name),
+            base_url=self.base_url_for(name, user),
         )
 
     async def list_providers(

@@ -195,10 +195,19 @@ export interface UserStats {
   chunks: number;
 }
 
-export interface ProviderKeyInfo {
+export interface ProviderConfigInfo {
   configured: boolean;
+  key_configured: boolean;
   key_masked: string;
+  source: 'user' | 'environment' | 'local' | 'none' | string;
   model: string;
+  model_override: string;
+  default_model: string;
+  base_url: string;
+  base_url_override: string;
+  default_base_url: string;
+  requires_api_key: boolean;
+  local: boolean;
 }
 
 export interface UserInfo {
@@ -214,7 +223,7 @@ export interface UserInfo {
   qwen_configured: boolean;
   qwen_key_masked: string;
   qwen_model: string;
-  provider_keys?: Record<string, ProviderKeyInfo>;
+  providers?: Record<string, ProviderConfigInfo>;
   created_at?: string | null;
   updated_at?: string | null;
   stats?: UserStats | null;
@@ -257,6 +266,9 @@ export interface UserCreatePayload {
   deepseek_model?: string | null;
   qwen_api_key?: string | null;
   qwen_model?: string | null;
+  qwen_local_api_key?: string | null;
+  qwen_local_model?: string | null;
+  provider_base_urls?: Record<string, string>;
 }
 
 export interface UserUpdatePayload {
@@ -270,5 +282,9 @@ export interface UserUpdatePayload {
   qwen_api_key?: string | null;
   qwen_model?: string | null;
   clear_qwen_key?: boolean;
+  qwen_local_api_key?: string | null;
+  qwen_local_model?: string | null;
+  clear_qwen_local_key?: boolean;
+  provider_base_urls?: Record<string, string>;
 }
 

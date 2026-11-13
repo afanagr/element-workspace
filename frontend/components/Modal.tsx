@@ -4,6 +4,72 @@ import { useEffect, useRef, useState } from 'react';
 
 import { useI18n } from '@/lib/i18n';
 
+interface ModalShellProps {
+  title: string;
+  subtitle?: string;
+  open: boolean;
+  width?: string;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+  onClose: () => void;
+}
+
+/** Generic dialog used for the user editor and other multi-field forms. */
+export function Modal({
+  title,
+  subtitle,
+  open,
+  width = 'max-w-3xl',
+  children,
+  footer,
+  onClose,
+}: ModalShellProps) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 backdrop-blur-sm sm:items-center"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className={`panel my-auto w-full ${width} max-h-[92vh] overflow-y-auto rounded-xl p-4 shadow-2xl`}
+      >
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="leading-tight">
+            <div className="text-sm font-semibold">{title}</div>
+            {subtitle ? (
+              <div className="mt-0.5 text-[11px] text-slate-500 dark:text-zinc-400">{subtitle}</div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost px-2 py-0.5 text-xs"
+            onClick={onClose}
+            aria-label="close"
+          >
+            ✕
+          </button>
+        </div>
+        {children}
+        {footer ? (
+          <div className="mt-4 flex flex-wrap items-center justify-end gap-2">{footer}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 interface ModalProps {
   title: string;
   open: boolean;

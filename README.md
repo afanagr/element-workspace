@@ -238,8 +238,10 @@ any provider/model in the chat composer.
 2. the deployment-wide `DEEPSEEK_API_KEY` / `QWEN_API_KEY` (alias `DASHSCOPE_API_KEY`)
    from `.env`, used as a fallback for accounts without a personal key.
 
-The local provider needs no key: it is enabled as soon as `QWEN_LOCAL_BASE_URL` is
-non-empty. Models are served by any OpenAI-compatible runtime, e.g.:
+The local provider needs no key: it is enabled as soon as an endpoint is known.
+The endpoint can be set deployment-wide (`QWEN_LOCAL_BASE_URL`) or per account in
+`/admin` → user card → *Address* (empty = server default). Any OpenAI-compatible
+runtime works, e.g.:
 
 ```bash
 # Ollama on the host, backend in Docker (host.docker.internal is mapped by compose)
@@ -291,8 +293,8 @@ GET  /api/auth/me                 current account
 POST /api/auth/password           {"current_password","new_password"}
 
 GET    /api/admin/users           accounts + per-user counters
-POST   /api/admin/users           create (username, password, role, deepseek/qwen key + model)
-PATCH  /api/admin/users/{id}      rename, reset password, change role/state, set or clear keys
+POST   /api/admin/users           create (username, password, role, provider keys/models/addresses)
+PATCH  /api/admin/users/{id}      rename, reset password, change role/state, set or clear provider settings
 DELETE /api/admin/users/{id}      delete the account with its projects, chats and vectors
 GET    /api/admin/projects        every project + owner + file/chunk counts
 GET    /api/admin/overview        counters for the dashboard

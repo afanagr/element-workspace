@@ -59,6 +59,11 @@ class User(Base, TimestampMixin):
     deepseek_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     qwen_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     qwen_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    qwen_local_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    qwen_local_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Per-account endpoint overrides: {"deepseek": "https://...", "qwen": "..."}.
+    # An empty/missing entry means "use the deployment-wide default".
+    provider_base_urls: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     @property
     def is_admin(self) -> bool:
