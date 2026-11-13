@@ -70,12 +70,6 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         warnings.append(
             "The bootstrap administrator still uses the default password - change it after login."
         )
-    if not configured:
-        warnings.append(
-            "No chat provider is configured: no DeepSeek/Qwen API key is set and "
-            "QWEN_LOCAL_BASE_URL is empty."
-        )
-        banner = "No chat provider is configured - administrators can assign keys in /admin."
     if not embedding_configured:
         warnings.append(
             "Local embeddings are unavailable - document search (RAG) is disabled. "
