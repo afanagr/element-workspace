@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -47,6 +48,62 @@ Rules:
 - Never claim a file was created, changed or deleted unless a tool call succeeded.
 - Answer in the user's language, be concise, and show the important result (not raw dumps).
 """
+
+# Tools that actually change the project. A final answer without at least one
+# successful call from this set must not be trusted when the user asked for an
+# edit - small models tend to claim success after only reading a file.
+MUTATING_TOOLS = frozenset(
+    {
+        "write_file",
+        "create_folder",
+        "rename_node",
+        "move_node",
+        "delete_node",
+        "excel_write",
+        "excel_add_sheet",
+        "translate_file",
+        "create_pdf",
+    }
+)
+
+_ACTION_RE = re.compile(
+    r"\b(добавь|добавьте|запиши|запишите|измени|измените|создай|создайте|удали|"
+    r"удалите|переименуй|переименуйте|перемести|переместите|обнови|обновите|вставь|"
+    r"вставьте|заполни|заполните|дополни|дополните|переведи|переведите|add|append|"
+    r"write|create|update|delete|remove|rename|move|insert|fill|edit|translate|put)\b",
+    re.IGNORECASE,
+)
+_QUESTION_RE = re.compile(
+    r"(^\s*(как|что|почему|зачем|где|когда|можно ли|how|what|why|where|can|is|are)\b)"
+    r"|(\?\s*$)",
+    re.IGNORECASE,
+)
+_FILE_HINT_RE = re.compile(
+    r"(файл|документ|excel|xlsx|xls|word|docx|pdf|таблиц|лист|папк|проект|"
+    r"file|document|sheet|folder|project|spreadsheet|txt|csv|json|markdown|log|"
+    r"\.(txt|csv|md|json|ya?ml|log|py|js|ts|tsx|html|htm))",
+    re.IGNORECASE,
+)
+
+MAX_TOOL_CORRECTIONS = 2
+NO_MUTATION_REMINDER = (
+    "You have NOT changed anything yet: no project-changing tool was called, so the "
+    "file is untouched. Do NOT claim success. Do NOT call list/read tools again - the "
+    "file contents are already in the tool results above. Call excel_write (for "
+    "spreadsheets) or write_file (for text) RIGHT NOW with the final data, then wait "
+    "for the tool result before answering."
+)
+NOT_APPLIED_NOTE = (
+    "\n\n⚠️ Изменения не применены: модель не вызвала ни одного инструмента записи."
+)
+
+
+def _is_edit_request(text: str, has_attachments: bool = False) -> bool:
+    if _QUESTION_RE.search(text):
+        return False
+    if not _ACTION_RE.search(text):
+        return False
+    return has_attachments or bool(_FILE_HINT_RE.search(text))
 
 
 @dataclass(slots=True)
@@ -233,6 +290,9 @@ async def run_agent(
 
     started_at = time.perf_counter()
     specs = tool_specs()
+    edit_requested = _is_edit_request(request.text, bool(request.attachments))
+    mutations_done = 0
+    corrections = 0
 
     for _step in range(max(1, settings.max_agent_steps)):
         step_parts: list[str] = []
@@ -363,6 +423,23 @@ async def run_agent(
         )
 
         if not tool_calls:
+            if edit_requested and mutations_done == 0:
+                if corrections < MAX_TOOL_CORRECTIONS:
+                    corrections += 1
+                    logger.info(
+                        "Model answered an edit request without calling a write tool; "
+                        "asking again (%s/%s)",
+                        corrections,
+                        MAX_TOOL_CORRECTIONS,
+                    )
+                    messages.append(
+                        ChatMessage(
+                            role="user",
+                            content="[AUTOMATIC CHECK] " + NO_MUTATION_REMINDER,
+                        )
+                    )
+                    continue
+                answer_text = f"{answer_text.rstrip()}{NOT_APPLIED_NOTE}"
             record = await chat_service.add_message(
                 db,
                 session.id,
@@ -397,6 +474,8 @@ async def run_agent(
         tool_payloads: list[dict[str, Any]] = []
         for call in tool_calls:
             result = await execute_tool(ctx, call.name, call.arguments)
+            if result.ok and call.name in MUTATING_TOOLS:
+                mutations_done += 1
             await db.commit()
             yield {
                 "type": "tool_result",
