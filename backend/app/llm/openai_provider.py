@@ -118,15 +118,26 @@ class OpenAIProvider(LLMProvider):
         converted: list[dict[str, Any]] = []
         for message in messages:
             if message.role == "tool":
+                content = message.content or ""
+                if not content.strip():
+                    content = "(no output)"
                 converted.append(
                     {
                         "role": "tool",
                         "tool_call_id": message.tool_call_id or "",
-                        "content": message.content or "",
+                        "content": content,
                     }
                 )
             elif message.role == "assistant":
-                payload: dict[str, Any] = {"role": "assistant", "content": message.content or None}
+                text = message.content or ""
+                if not text.strip() and not message.tool_calls:
+                    # Some providers (YandexGPT 5.1) reject empty message text
+                    # with "InvalidArgument: empty message text".
+                    continue
+                payload: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": text if text.strip() else None,
+                }
                 if message.tool_calls:
                     payload["tool_calls"] = [
                         {
@@ -140,11 +151,12 @@ class OpenAIProvider(LLMProvider):
                         }
                         for call in message.tool_calls
                     ]
-                if payload["content"] is None and "tool_calls" not in payload:
-                    payload["content"] = ""
                 converted.append(payload)
             else:
-                converted.append({"role": message.role, "content": build_user_content(message)})
+                content = build_user_content(message)
+                if isinstance(content, str) and not content.strip():
+                    continue
+                converted.append({"role": message.role, "content": content})
         return converted
 
     @staticmethod

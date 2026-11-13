@@ -177,7 +177,10 @@ def _to_llm_history(records: list[Any]) -> list[ChatMessage]:
         if record.role not in ("user", "assistant"):
             continue
         content = record.content or ""
-        if not content.strip() and not record.tool_calls:
+        # Never replay empty messages: progress rows (tool calls without text)
+        # and failed/empty answers would be sent as "" and some providers
+        # (e.g. YandexGPT 5.1) reject the whole request with "empty message text".
+        if not content.strip():
             continue
         history.append(ChatMessage(role=record.role, content=content))
     return history
