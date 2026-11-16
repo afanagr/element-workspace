@@ -22,6 +22,7 @@ interface ConnectionDraft {
   base_url: string;
   key: string;
   model: string;
+  supports_tools: boolean;
   clearKey: boolean;
   hasKey: boolean;
   keyMasked: string;
@@ -42,6 +43,7 @@ function emptyConnection(): ConnectionDraft {
     base_url: '',
     key: '',
     model: '',
+    supports_tools: true,
     clearKey: false,
     hasKey: false,
     keyMasked: '',
@@ -66,6 +68,7 @@ function draftFromUser(user: UserInfo): Draft {
         base_url: item.base_url,
         key: '',
         model: item.model,
+        supports_tools: item.supports_tools !== false,
         clearKey: false,
         hasKey: item.has_key,
         keyMasked: item.key_masked,
@@ -186,6 +189,7 @@ export function AdminPanel() {
       name: row.name.trim(),
       base_url: row.base_url.trim(),
       model: row.model.trim(),
+      supports_tools: row.supports_tools,
       ...(row.key.trim() ? { api_key: row.key.trim() } : {}),
       ...(row.clearKey ? { clear_key: true } : {}),
     }));
@@ -546,6 +550,9 @@ export function AdminPanel() {
                     <th className="py-1 pr-2">{t('admin.connectionAddress')}</th>
                     <th className="py-1 pr-2">{t('admin.connectionKey')}</th>
                     <th className="py-1 pr-2">{t('admin.connectionModel')}</th>
+                    <th className="py-1 pr-2" title={t('admin.connectionToolsHint')}>
+                      {t('admin.connectionTools')}
+                    </th>
                     <th className="py-1 text-right">{t('admin.actions')}</th>
                   </tr>
                 </thead>
@@ -610,6 +617,22 @@ export function AdminPanel() {
                             patchConnection(index, { model: event.target.value })
                           }
                         />
+                      </td>
+                      <td className="py-2 pr-2">
+                        <label
+                          className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-zinc-400"
+                          title={t('admin.connectionToolsHint')}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mr-1"
+                            checked={row.supports_tools}
+                            onChange={(event) =>
+                              patchConnection(index, { supports_tools: event.target.checked })
+                            }
+                          />
+                          {row.supports_tools ? t('admin.toolsOn') : t('admin.toolsOff')}
+                        </label>
                       </td>
                       <td className="py-2 text-right">
                         <button

@@ -387,17 +387,38 @@ export function ChatPanel({
             onKeyDown={onKeyDown}
             disabled={!projectLabel}
           />
-          <button
-            type="button"
-            className="btn btn-primary h-[54px] px-3"
-            disabled={chat.streaming || !text.trim() || noProvider || !projectLabel}
-            onClick={() => void submit()}
-          >
-            {chat.streaming ? '…' : t('chat.send')}
-          </button>
+          <div className="flex flex-col gap-1.5">
+            <button
+              type="button"
+              className="btn btn-primary h-[54px] px-3"
+              disabled={chat.streaming || !text.trim() || noProvider || !projectLabel}
+              onClick={() => void submit()}
+            >
+              {t('chat.send')}
+            </button>
+            {chat.streaming ? (
+              <button
+                type="button"
+                className="btn h-[26px] px-3 text-[11px]"
+                title={t('chat.stopTip')}
+                onClick={() => chat.stop()}
+              >
+                {t('chat.stop')}
+              </button>
+            ) : null}
+          </div>
         </div>
         <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400">
-          <span>{t('chat.hint')}</span>
+          <span>
+            {chat.streaming && chat.progress
+              ? t('chat.step', {
+                  n: Math.max(1, chat.progress.steps),
+                  seconds: Math.round(chat.progress.secondsLeft ?? 0),
+                })
+              : chat.stopped
+                ? t('chat.stopped')
+                : t('chat.hint')}
+          </span>
           {chat.usage ? (
             <span>
               {t('chat.usage', {

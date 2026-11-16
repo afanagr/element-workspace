@@ -195,6 +195,7 @@ def connection_to_dict(connection: ModelConnection) -> dict[str, Any]:
         "key_masked": mask_secret(key),
         "has_key": bool(key),
         "model": connection.model,
+        "supports_tools": connection.supports_tools,
     }
 
 

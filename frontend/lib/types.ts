@@ -115,6 +115,8 @@ export interface ToolCallInfo {
   summary?: string;
   operation_id?: string | null;
   reverted?: boolean;
+  /** Raw `data` payload of the tool result (verification, counts, ids). */
+  data?: Record<string, unknown>;
 }
 
 export interface ChatMsg {
@@ -170,6 +172,13 @@ export interface AgentEvent {
   [key: string]: unknown;
 }
 
+/** Live counters of the running agent (updated by every `usage` event). */
+export interface RunProgress {
+  steps: number;
+  tokensLeft: number | null;
+  secondsLeft: number | null;
+}
+
 // ---------------------------------------------------------------------- auth
 export type UserRole = 'admin' | 'user';
 
@@ -186,6 +195,7 @@ export interface ModelConnectionInfo {
   key_masked: string;
   has_key: boolean;
   model: string;
+  supports_tools?: boolean;
 }
 
 export interface UserInfo {
@@ -235,6 +245,7 @@ export interface ModelConnectionPayload {
   model: string;
   api_key?: string | null;
   clear_key?: boolean;
+  supports_tools?: boolean;
 }
 
 export interface UserCreatePayload {

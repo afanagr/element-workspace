@@ -116,6 +116,10 @@ export const en: Record<string, string> = {
   'chat.placeholder': 'Ask about your documents, or tell the AI to edit a file…',
   'chat.send': 'Send',
   'chat.hint': 'Enter to send · Shift+Enter for a new line',
+  'chat.stop': 'Stop',
+  'chat.stopTip': 'Stop the current run (the answer up to this point is kept)',
+  'chat.step': 'step {n} · ~{seconds}s left',
+  'chat.stopped': 'Stopped by you',
   'chat.usage': '{provider}/{model} · {tokens} tokens · {ms} ms',
   'chat.thinking': 'thinking…',
 
@@ -220,6 +224,9 @@ export const en: Record<string, string> = {
   'tool.running': 'running…',
   'tool.done': 'done',
   'tool.failed': 'failed',
+  'tool.verified': 'verified',
+  'tool.verifyFailed': 'verification failed',
+  'tool.arguments': 'arguments',
   'tool.reverted': 'reverted',
 
   // -------------------------------------------------------------- settings
@@ -283,6 +290,10 @@ export const en: Record<string, string> = {
   'admin.connectionAddress': 'Address',
   'admin.connectionKey': 'Key',
   'admin.connectionModel': 'Model',
+  'admin.connectionTools': 'Tools',
+  'admin.connectionToolsHint': 'Turn off for models without OpenAI-compatible function calling: chat works, the file tools do not.',
+  'admin.toolsOn': 'on',
+  'admin.toolsOff': 'off',
   'admin.connectionNamePlaceholder': 'e.g. qwen-local',
   'admin.connectionAddressPlaceholder': 'https://host/v1',
   'admin.connectionKeyOptional': 'API key (optional)',

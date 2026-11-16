@@ -8,6 +8,7 @@ import type {
   ChatError,
   ChatMsg,
   Citation,
+  RunProgress,
   SessionInfo,
   ToolCallInfo,
   UsageInfo,
@@ -37,6 +38,12 @@ export interface ChatController {
   usage: UsageInfo | null;
   citations: Citation[];
   active: ActiveModel;
+  /** Counters of the running agent (steps done, budget left). */
+  progress: RunProgress | null;
+  /** True when the last run was stopped by the user. */
+  stopped: boolean;
+  /** Ask the backend to stop the current run (cooperative cancel). */
+  stop: () => void;
   send: (
     text: string,
     attachments: string[],
@@ -118,6 +125,8 @@ export function useChat(options: UseChatOptions): ChatController {
   const [notice, setNotice] = useState<string | null>(null);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [citations, setCitations] = useState<Citation[]>([]);
+  const [progress, setProgress] = useState<RunProgress | null>(null);
+  const [stopped, setStopped] = useState(false);
   const [active, setActive] = useState<ActiveModel>({
     provider: null,
     model: null,
@@ -172,6 +181,8 @@ export function useChat(options: UseChatOptions): ChatController {
           setError(null);
           setUsage(null);
           setCitations([]);
+          setProgress({ steps: 0, tokensLeft: null, secondsLeft: null });
+          setStopped(false);
           break;
         }
         case 'citations': {
@@ -218,6 +229,7 @@ export function useChat(options: UseChatOptions): ChatController {
                       ok: Boolean(event.ok),
                       summary: String(event.summary || ''),
                       operation_id: (event.operation_id as string | null) ?? null,
+                      data: (event.data as Record<string, unknown> | undefined) ?? undefined,
                     }
                   : call,
               ),
@@ -290,6 +302,29 @@ export function useChat(options: UseChatOptions): ChatController {
             },
             duration_ms: Number(event.duration_ms || 0),
           });
+          setProgress((prev) => ({
+            steps: (prev?.steps ?? 0) + 1,
+            tokensLeft:
+              typeof event.tokens_left === 'number' ? event.tokens_left : (prev?.tokensLeft ?? null),
+            secondsLeft:
+              typeof event.seconds_left === 'number'
+                ? event.seconds_left
+                : (prev?.secondsLeft ?? null),
+          }));
+          break;
+        }
+        case 'cancelled': {
+          setStopped(true);
+          setProgress(null);
+          setStreamingState(false);
+          setMessages((prev) => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last && last.role === 'assistant' && last.pending) {
+              copy[copy.length - 1] = { ...last, pending: false };
+            }
+            return copy;
+          });
           break;
         }
         case 'provider_fallback': {
@@ -327,6 +362,7 @@ export function useChat(options: UseChatOptions): ChatController {
           break;
         case 'stream_end':
           setStreamingState(false);
+          setProgress(null);
           optionsRef.current.onWorkspaceChanged();
           break;
         default:
@@ -534,6 +570,8 @@ export function useChat(options: UseChatOptions): ChatController {
       setNotice(null);
       setUsage(null);
       setCitations([]);
+      setProgress(null);
+      setStopped(false);
 
       const payload = {
         type: 'message',
@@ -592,6 +630,18 @@ export function useChat(options: UseChatOptions): ChatController {
 
   const clearError = useCallback(() => setError(null), []);
 
+  const stop = useCallback(() => {
+    const socket = socketRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'cancel' }));
+      setStopped(true);
+      return;
+    }
+    // The REST fallback cannot be interrupted server-side; say so instead of
+    // pretending the run stopped.
+    setNotice('Stopping is available only over the live connection.');
+  }, []);
+
   return {
     sessions,
     sessionId,
@@ -603,7 +653,10 @@ export function useChat(options: UseChatOptions): ChatController {
     usage,
     citations,
     active,
+    progress,
+    stopped,
     send,
+    stop,
     newSession,
     selectSession,
     removeSession,

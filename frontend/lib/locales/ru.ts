@@ -116,6 +116,10 @@ export const ru: Record<string, string> = {
   'chat.placeholder': 'Спросите о документах или попросите ИИ изменить файл…',
   'chat.send': 'Отправить',
   'chat.hint': 'Enter — отправить · Shift+Enter — новая строка',
+  'chat.stop': 'Стоп',
+  'chat.stopTip': 'Остановить текущий прогон (уже полученный ответ сохраняется)',
+  'chat.step': 'шаг {n} · осталось ~{seconds} с',
+  'chat.stopped': 'Остановлено вами',
   'chat.usage': '{provider}/{model} · {tokens} токенов · {ms} мс',
   'chat.thinking': 'думает…',
 
@@ -220,6 +224,9 @@ export const ru: Record<string, string> = {
   'tool.running': 'выполняется…',
   'tool.done': 'готово',
   'tool.failed': 'ошибка',
+  'tool.verified': 'проверено',
+  'tool.verifyFailed': 'проверка не прошла',
+  'tool.arguments': 'аргументы',
   'tool.reverted': 'отменено',
 
   // -------------------------------------------------------------- settings
@@ -283,6 +290,10 @@ export const ru: Record<string, string> = {
   'admin.connectionAddress': 'Адрес',
   'admin.connectionKey': 'Ключ',
   'admin.connectionModel': 'Модель',
+  'admin.connectionTools': 'Инструменты',
+  'admin.connectionToolsHint': 'Выключите для моделей без OpenAI-совместимого function calling: чат работает, файловые инструменты — нет.',
+  'admin.toolsOn': 'вкл',
+  'admin.toolsOff': 'выкл',
   'admin.connectionNamePlaceholder': 'напр. qwen-local',
   'admin.connectionAddressPlaceholder': 'https://host/v1',
   'admin.connectionKeyOptional': 'API-ключ (не обязательно)',
