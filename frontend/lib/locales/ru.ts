@@ -178,6 +178,12 @@ export const ru: Record<string, string> = {
   'pdf.noPages': 'В документе должна остаться хотя бы одна страница.',
   'pdf.discardConfirm': 'Отменить несохранённые изменения страниц?',
 
+  // ------------------------------------------------------------- onlyoffice
+  'office.connecting': 'Открываем документ в OnlyOffice…',
+  'office.failed': 'OnlyOffice не смог открыть документ: {error}',
+  'office.failedShort': 'Редактор документа сообщил об ошибке.',
+  'office.retry': 'Повторить',
+
   // ----------------------------------------------------------------- image
   'image.ocr': '🔍 Извлечь текст (OCR)',
   'image.running': 'Tesseract OCR выполняется…',

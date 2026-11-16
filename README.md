@@ -111,6 +111,21 @@ gateways.
   turns green after migrations complete.
 * Direct backend for debugging: `http://localhost:8001/api/docs` (OpenAPI).
 
+### OnlyOffice editors
+
+`docx`, `xlsx`/`xlsm`, `pptx`, `pdf` and `csv` files are opened in
+[OnlyOffice Document Server](https://www.onlyoffice.com/) (`documentserver` service, port `8081`).
+The editor talks to the API through short-lived HMAC-signed links, so no session token ever leaves the
+workspace; every save arrives through a JWT-signed callback and becomes a regular file version, then
+goes through the usual indexing pipeline. CSV files are converted back to plain CSV on save.
+
+Set `ONLYOFFICE_ENABLED=false` in `.env` (or clear `ONLYOFFICE_URL`/`ONLYOFFICE_JWT_SECRET`) and
+restart the backend to fall back to the built-in viewers without touching the database. The complete
+pre-OnlyOffice state is also preserved in the git tag `pre-onlyoffice`.
+
+The Community Edition is licensed under AGPLv3 and is limited to ~20 simultaneous connections; the
+container is capped at 2 GB RAM in `docker-compose.yml`.
+
 ### Roles
 
 | role | can do |
@@ -490,6 +505,9 @@ AI-created XLSX with a second sheet, ZIP download/extract and operation undo.
 | `RAG off` chip | no embedding provider configured or Qdrant unhealthy. Set `EMBEDDING_PROVIDER=local` and install sentence-transformers. |
 | Keys “lost” after restart | `APP_SECRET_KEY` changed → stored ciphertext cannot be decrypted; re-enter keys. |
 | Chat stops mid-answer | provider error after the first token is surfaced (retries intentionally apply before the first token only). |
+| OnlyOffice editor is blank / “API failed to load” | `docker compose ps` must show `documentserver` healthy; the browser must reach `ONLYOFFICE_URL` (port `8081`). |
+| `OnlyOffice callback rejected: missing or invalid JWT` | `ONLYOFFICE_JWT_SECRET` differs between `.env` and the `documentserver` container - set it once and recreate both. |
+| Need the old viewers back | set `ONLYOFFICE_ENABLED=false`, restart `backend`; full rollback: `git checkout pre-onlyoffice`. |
 
 ---
 
@@ -498,6 +516,8 @@ AI-created XLSX with a second sheet, ZIP download/extract and operation undo.
 * Scanned PDFs: page-image OCR (render → Tesseract) instead of text-layer-only extraction.
 * Tool-call *deltas* are collapsed into one card per call (no partial argument view).
 * Excel editing supports `.xlsx`/`.xlsm`; `.xls` is read-only (write a new `.xlsx`).
+* Legacy `.doc`/`.xls`/`.ppt` stay on the built-in viewers: OnlyOffice would silently rewrite them
+  into OOXML on save. OnlyOffice Community Edition allows ~20 simultaneous editing sessions.
 * Chat attachments are capped (8 nodes, 12k chars each) — rely on RAG for large corpora.
 * Single-user stub only: no login/sessions, no per-user ACLs, no audit export.
 * No global “re-index everything” button in the UI (per project/folder reindex exists); add a Celery

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import { api } from '@/lib/api';
+import type { OfficeSession } from '@/lib/api';
 import { useI18n } from '@/lib/i18n';
 import type { VersionInfo, WorkNode } from '@/lib/types';
 import { fileGlyph, formatBytes, indexStatusKey, indexStatusTone } from '@/lib/utils';
@@ -12,6 +13,7 @@ import { DocxViewer } from './viewers/DocxViewer';
 import { ExcelViewer } from './viewers/ExcelViewer';
 import { ExtractViewer } from './viewers/ExtractViewer';
 import { ImageViewer } from './viewers/ImageViewer';
+import { OfficeViewer } from './viewers/OfficeViewer';
 import { PdfViewer } from './viewers/PdfViewer';
 import { TextViewer } from './viewers/TextViewer';
 
@@ -24,6 +26,20 @@ interface ViewerProps {
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.gif']);
 const EXCEL_EXTENSIONS = new Set(['.xlsx', '.xls', '.xlsm', '.csv']);
+// These files are opened in OnlyOffice when the deployment has it configured;
+// otherwise the built-in viewers below stay in use (the rollback path).
+const OFFICE_EXTENSIONS = new Set([
+  '.docx',
+  '.odt',
+  '.rtf',
+  '.xlsx',
+  '.xlsm',
+  '.ods',
+  '.csv',
+  '.pptx',
+  '.odp',
+  '.pdf',
+]);
 
 export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
   const { t } = useI18n();
@@ -31,11 +47,46 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
   const [deleting, setDeleting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [versions, setVersions] = useState<VersionInfo[] | null>(null);
+  const [officeSession, setOfficeSession] = useState<{
+    nodeId: string;
+    session: OfficeSession;
+  } | null>(null);
+  const [officeLoading, setOfficeLoading] = useState(false);
+  const activeOfficeSession =
+    node && officeSession?.nodeId === node.id ? officeSession.session : null;
+  const officeCandidate = Boolean(
+    node && node.kind === 'file' && OFFICE_EXTENSIONS.has(node.extension),
+  );
 
   useEffect(() => {
     setVersions(null);
     setRenaming(false);
     setDeleting(false);
+    setOfficeSession(null);
+    setOfficeLoading(false);
+  }, [node?.id]);
+
+  useEffect(() => {
+    if (!node || node.kind !== 'file' || !OFFICE_EXTENSIONS.has(node.extension)) return;
+    let cancelled = false;
+    setOfficeSession(null);
+    setOfficeLoading(true);
+    void (async () => {
+      try {
+        const config = await api.officeConfig();
+        if (cancelled || !config.enabled) return;
+        const session = await api.officeSession(node.id);
+        if (!cancelled) setOfficeSession({ nodeId: node.id, session });
+      } catch {
+        // Any failure (backend unavailable, OnlyOffice disabled or
+        // misconfigured) falls back to the built-in viewers below.
+      } finally {
+        if (!cancelled) setOfficeLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [node?.id]);
 
   if (!node) {
@@ -112,6 +163,19 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
 
   const renderBody = () => {
     if (node.kind !== 'file') return null;
+    if (activeOfficeSession) {
+      return (
+        <OfficeViewer
+          key={node.id}
+          node={node}
+          session={activeOfficeSession}
+          onSaved={onRefresh}
+        />
+      );
+    }
+    if (officeCandidate && officeLoading) {
+      return <div className="p-4 text-xs text-slate-500">{t('office.connecting')}</div>;
+    }
     if (EXCEL_EXTENSIONS.has(node.extension)) {
       return <ExcelViewer key={`${node.id}-${node.updated_at}`} node={node} onSaved={onRefresh} />;
     }

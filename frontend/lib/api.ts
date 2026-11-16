@@ -18,6 +18,16 @@ import type {
   WorkNode,
 } from './types';
 
+export interface OfficeConfigResponse {
+  enabled: boolean;
+  documentServerUrl: string;
+}
+
+export interface OfficeSession {
+  config: Record<string, unknown>;
+  documentServerUrl: string;
+}
+
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
 
 const TOKEN_KEY = 'afw-token';
@@ -215,6 +225,9 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ pages }),
     }),
+  officeConfig: () => request<OfficeConfigResponse>('/api/office/config'),
+  officeSession: (nodeId: string) =>
+    request<OfficeSession>(`/api/nodes/${nodeId}/office`, { method: 'POST' }),
   versions: (nodeId: string) => request<VersionInfo[]>(`/api/nodes/${nodeId}/versions`),
   revertVersion: (nodeId: string, versionId: string) =>
     request<WorkNode>(`/api/nodes/${nodeId}/versions/${versionId}/revert`, { method: 'POST' }),

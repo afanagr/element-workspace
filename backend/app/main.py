@@ -9,13 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import admin, auth, chat, files, health, providers
+from app.api import admin, auth, chat, files, health, office, providers
 from app.config import settings
 from app.db import session_scope
 from app.llm.schemas import NoProviderAvailable
 from app.logging_config import configure_logging, get_logger
 from app.services import users as user_service
 from app.services.nodes import NodeError
+from app.services.office import OfficeError
 from app.services.operations import OperationError
 from app.services.storage import storage
 
@@ -87,6 +88,11 @@ async def operation_error_handler(request: Request, exc: OperationError) -> JSON
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+@app.exception_handler(OfficeError)
+async def office_error_handler(request: Request, exc: OfficeError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+
+
 @app.exception_handler(NoProviderAvailable)
 async def provider_error_handler(request: Request, exc: NoProviderAvailable) -> JSONResponse:
     return JSONResponse(
@@ -117,3 +123,4 @@ app.include_router(admin.router)
 app.include_router(files.router)
 app.include_router(chat.router)
 app.include_router(providers.router)
+app.include_router(office.router)

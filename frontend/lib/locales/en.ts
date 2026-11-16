@@ -178,6 +178,12 @@ export const en: Record<string, string> = {
   'pdf.noPages': 'The document must keep at least one page.',
   'pdf.discardConfirm': 'Discard unsaved page changes?',
 
+  // ------------------------------------------------------------- onlyoffice
+  'office.connecting': 'Opening the document in OnlyOffice…',
+  'office.failed': 'OnlyOffice could not open the document: {error}',
+  'office.failedShort': 'The document editor reported an error.',
+  'office.retry': 'Try again',
+
   // ----------------------------------------------------------------- image
   'image.ocr': '🔍 Extract text (OCR)',
   'image.running': 'Running Tesseract OCR…',

@@ -90,6 +90,31 @@ class Settings(BaseSettings):
     tesseract_lang: str = "eng+rus"
     tesseract_cmd: str = ""
 
+    # --------------------------------------------------------- onlyoffice
+    # OnlyOffice Document Server replaces the built-in editors when configured.
+    # Set ONLYOFFICE_ENABLED=false (or clear the URL/secret) to fall back to the
+    # legacy in-app viewers; the previous implementation is kept in the repo.
+    onlyoffice_enabled: bool = False
+    onlyoffice_url: str = ""  # public URL the browser loads api.js from
+    onlyoffice_jwt_secret: str = ""
+    # Base URL the Document Server container uses to reach this API
+    # (downloads and callbacks are proxied inside the compose network).
+    onlyoffice_api_url: str = "http://backend:8000"
+    onlyoffice_lang: str = "ru"
+    onlyoffice_allowed_hosts: str = "documentserver,localhost,127.0.0.1"
+    onlyoffice_download_ttl: int = 900
+    onlyoffice_callback_ttl: int = 86_400
+
+    @property
+    def office_configured(self) -> bool:
+        return bool(
+            self.onlyoffice_enabled and self.onlyoffice_url and self.onlyoffice_jwt_secret
+        )
+
+    @property
+    def onlyoffice_hosts(self) -> set[str]:
+        return {host.strip().lower() for host in self.onlyoffice_allowed_hosts.split(",") if host.strip()}
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
