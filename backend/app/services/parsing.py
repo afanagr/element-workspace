@@ -341,11 +341,12 @@ def _meaningful_chars(text: str) -> int:
 def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
     import pdfplumber
 
-    sha256 = hashlib.sha256(data).hexdigest() if (ocr and settings.ocr_pdf_enabled) else ""
-    if sha256:
-        cached = load_cached(sha256)
-        if cached is not None:
-            return _cached_pdf_document(cached)
+    # A cached OCR result is reused by every caller (indexing, previews, agent
+    # tools), so a scan does not need to be recognised twice.
+    sha256 = hashlib.sha256(data).hexdigest()
+    cached = load_cached(sha256)
+    if cached is not None:
+        return _cached_pdf_document(cached)
 
     segments: list[Segment] = []
     pages = 0
