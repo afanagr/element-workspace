@@ -153,6 +153,8 @@ services:
     volumes:
       - onlyoffice_data:/var/www/onlyoffice/Data
       - onlyoffice_logs:/var/log/onlyoffice
+      - onlyoffice_lib:/var/lib/onlyoffice
+      - onlyoffice_db:/var/lib/postgresql
     # ~2 GB is the recommended minimum for the Community Edition; the limit
     # keeps the rest of the stack safe on small servers.
     mem_limit: 3g
@@ -206,3 +208,5 @@ volumes:
   workspace_data:
   onlyoffice_data:
   onlyoffice_logs:
+  onlyoffice_lib:
+  onlyoffice_db:
