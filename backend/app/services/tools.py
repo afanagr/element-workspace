@@ -10,17 +10,20 @@ import json
 import re
 import uuid
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.logging_config import get_logger
 from app.llm.factory import registry
 from app.llm.schemas import ChatMessage, TextDelta, ToolSpec
 from app.models import Node, Operation
 from app.services import nodes as node_service
+from app.services import office_convert
 from app.services.documents import build_pdf_parts, build_text_document, pdf_page_count
 from app.services.indexer import enqueue_index
 from app.services.parsing import UnsupportedFormat, parse_document
@@ -107,7 +110,10 @@ TOOL_SPECS: list[ToolSpec] = [
         name="write_file",
         description=(
             "Create or overwrite a text/Markdown/CSV/JSON/Excel/DOCX/PDF file. "
-            "For .xlsx, .docx and .pdf the plain text content is converted into the real format."
+            "For .xlsx, .docx and .pdf the content is rendered into the real format: "
+            "Markdown tables, **bold**, *italic*, `code` and fenced code blocks are "
+            "supported; a JSON spec ({blocks:[...]} for DOCX, {sheets:[...]} for XLSX) "
+            "gives precise tables, styles and cell formats."
         ),
         parameters=_obj(
             {
@@ -199,10 +205,29 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="create_pdf",
-        description="Generate a NEW PDF document from Markdown-ish text (text only, no images).",
+        description=(
+            "Generate a NEW PDF document from Markdown-ish text or a JSON block spec. "
+            "The PDF is rendered through the OnlyOffice converter, so tables, bold text, "
+            "code blocks and images keep their layout (falls back to reportlab)."
+        ),
         parameters=_obj(
             {"parent_id": _STR, "name": _STR, "content": _STR},
             ["parent_id", "name", "content"],
+        ),
+    ),
+    ToolSpec(
+        name="convert_to_pdf",
+        description=(
+            "Convert an existing DOCX/XLSX/PPTX/ODT/ODS/ODP/CSV/RTF file to PDF "
+            "with real layout using the OnlyOffice converter. Pass name to choose "
+            "the output file name."
+        ),
+        parameters=_obj(
+            {
+                "node_id": _STR,
+                "name": {"type": "string", "description": "Optional output PDF name"},
+            },
+            ["node_id"],
         ),
     ),
     ToolSpec(
@@ -739,6 +764,89 @@ async def _translate_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     )
 
 
+_CONVERTIBLE_TO_PDF = {
+    ".docx",
+    ".xlsx",
+    ".xlsm",
+    ".pptx",
+    ".odt",
+    ".ods",
+    ".odp",
+    ".csv",
+    ".rtf",
+}
+
+
+async def _convert_to_pdf(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    node = await _resolve_node(ctx, args.get("node_id"))
+    if node.kind != "file" or not node.storage_key:
+        raise ToolError("convert_to_pdf requires an existing file")
+    extension = node_service.extension_of(node.name)
+    if extension not in _CONVERTIBLE_TO_PDF:
+        raise ToolError(f"Cannot convert {extension or 'this file'} to PDF")
+    if not settings.office_conversion_available:
+        raise ToolError("PDF conversion is not configured on this deployment")
+    data = await storage.read_bytes(node.storage_key)
+    try:
+        pdf = await anyio.to_thread.run_sync(
+            partial(
+                office_convert.convert_document,
+                data,
+                extension,
+                target="pdf",
+                title=node.name,
+            )
+        )
+    except office_convert.OfficeConversionError as exc:
+        raise ToolError(f"OnlyOffice conversion failed: {exc}") from exc
+    if len(pdf) > settings.max_upload_mb * 1024 * 1024:
+        raise ToolError(
+            f"The converted PDF exceeds the {settings.max_upload_mb} MB limit"
+        )
+    raw_name = str(args.get("name") or f"{node.name.rsplit('.', 1)[0]}.pdf")
+    name = node_service.sanitize_name(raw_name)
+    if not name.lower().endswith(".pdf"):
+        name = f"{name}.pdf"
+    if node.parent_id is None:
+        raise ToolError("The source file has no parent folder")
+    created, replaced = await node_service.create_file(
+        ctx.db,
+        node.parent_id,
+        name,
+        pdf,
+        created_by="ai",
+        note=f"converted from {node.name}",
+    )
+    undo = (
+        _version_undo(created)
+        if replaced
+        else {"action": "delete_node", "node_id": str(created.id)}
+    )
+    operation_id = await _record_operation(
+        ctx,
+        tool_name="convert_to_pdf",
+        description=f"Converted {node.name} to {name}",
+        node_id=created.id,
+        undo=undo,
+    )
+    enqueue_index([created.id])
+    ctx.changed_nodes.append(
+        {"id": str(created.id), "event": "updated" if replaced else "created"}
+    )
+    path = await node_service.node_path(ctx.db, created)
+    return ToolResult(
+        True,
+        f"Converted {node.name} to {path} ({len(pdf)} bytes, id={created.id}).",
+        {
+            "node_id": str(created.id),
+            "path": path,
+            "bytes": len(pdf),
+            "replaced": replaced,
+        },
+        operation_id,
+    )
+
+
 async def _create_pdf(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     name = str(args.get("name") or "document.pdf").strip()
     if not name.lower().endswith(".pdf"):
@@ -883,6 +991,7 @@ _HANDLERS = {
     "search_documents": _search_documents,
     "translate_file": _translate_file,
     "create_pdf": _create_pdf,
+    "convert_to_pdf": _convert_to_pdf,
     "pdf_split": _pdf_split,
 }
 

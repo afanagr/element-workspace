@@ -6,7 +6,9 @@ AI read, search **and actually edit** them — with citations, streaming answers
 * **File workspace** — projects → nested folders → files, context menu, drag & drop (files *and*
   folders), ZIP download / upload / extract.
 * **Chat with tools** — the model creates, reads, renames, moves, deletes files; appends Excel
-  sheets and cells; writes DOCX/PDF/Markdown; translates documents. Every mutating tool call is
+  sheets and cells; writes DOCX/PDF/Markdown; tables, inline formatting and JSON
+  block/sheet specs are rendered into real DOCX/XLSX, and PDFs go through the
+  OnlyOffice converter; translates documents. Every mutating tool call is
   recorded as a reversible operation.
 * **RAG with citations** — every document is parsed (Excel cells, Word, PDF, Tesseract OCR for
   images and scanned PDF pages), chunked, embedded and stored in Qdrant. Answers cite `[1] file.pdf (page:3)`.
@@ -118,6 +120,10 @@ gateways.
 The editor talks to the API through short-lived HMAC-signed links, so no session token ever leaves the
 workspace; every save arrives through a JWT-signed callback and becomes a regular file version, then
 goes through the usual indexing pipeline. CSV files are converted back to plain CSV on save.
+
+The same converter powers `POST /api/nodes/{id}/convert/pdf` and the agent's
+`convert_to_pdf` tool, so DOCX/XLSX/PPTX files become PDFs with real Word layout. If the
+Document Server is unavailable, PDF generation falls back to the built-in reportlab renderer.
 
 Set `ONLYOFFICE_ENABLED=false` in `.env` (or clear `ONLYOFFICE_URL`/`ONLYOFFICE_JWT_SECRET`) and
 restart the backend to fall back to the built-in viewers without touching the database. The complete
@@ -394,6 +400,7 @@ REST under `/api` (OpenAPI at `/api/docs`), JSON everywhere, NDJSON/WebSocket fo
 | GET | `/api/nodes/{id}/content` | inline bytes (viewers) with ETag (`?token=` allowed) |
 | GET | `/api/nodes/{id}/text` | extracted text/segments/meta (viewers + OCR) |
 | POST | `/api/nodes/{id}/ocr` | recognise a scanned PDF/image, cache the result and re-index |
+| POST | `/api/nodes/{id}/convert/pdf` | convert a DOCX/XLSX/PPTX/CSV/RTF file to PDF via OnlyOffice |
 | PUT | `/api/nodes/{id}/content` · `/api/nodes/{id}/sheet` | save a directly edited text file / spreadsheet cells (new version + reindex) |
 | GET | `/api/nodes/{id}/versions` · POST `…/versions/{version_id}/revert` | history |
 | POST | `/api/nodes/{id}/reindex` | queue indexing for a file/folder/project |

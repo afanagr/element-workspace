@@ -12,7 +12,7 @@ import hashlib
 import uuid
 
 import httpx
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +22,7 @@ from app.deps import current_user
 from app.logging_config import get_logger
 from app.models import Node, User
 from app.services import nodes as node_service
-from app.services import office
+from app.services import office, office_convert
 from app.services.indexer import enqueue_index
 from app.services.storage import storage
 
@@ -69,6 +69,21 @@ async def office_download(token: str, db: AsyncSession = Depends(get_db)) -> Fil
         storage.open_path(node.storage_key),
         media_type=node.mime or "application/octet-stream",
         filename=node.name,
+    )
+
+
+@router.get("/office/convert-source/{token}")
+async def office_convert_source(token: str) -> FileResponse:
+    """Serve a staged document to the Document Server for conversion."""
+    payload = office.verify_link(token, "cv")
+    try:
+        path = office_convert.source_path(str(payload.get("n") or ""))
+    except office_convert.OfficeConversionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=path.name,
     )
 
 

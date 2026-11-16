@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     # Base URL the Document Server container uses to reach this API
     # (downloads and callbacks are proxied inside the compose network).
     onlyoffice_api_url: str = "http://backend:8000"
+    onlyoffice_internal_url: str = "http://documentserver"
+    onlyoffice_convert_enabled: bool = True
+    onlyoffice_convert_timeout: int = 120
     onlyoffice_lang: str = "ru"
     onlyoffice_allowed_hosts: str = "documentserver,localhost,127.0.0.1"
     onlyoffice_download_ttl: int = 900
@@ -125,6 +128,10 @@ class Settings(BaseSettings):
         return bool(
             self.onlyoffice_enabled and self.onlyoffice_url and self.onlyoffice_jwt_secret
         )
+
+    @property
+    def office_conversion_available(self) -> bool:
+        return bool(self.office_configured and self.onlyoffice_convert_enabled)
 
     @property
     def onlyoffice_hosts(self) -> set[str]:

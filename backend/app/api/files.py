@@ -32,6 +32,7 @@ from app.schemas import (
     VersionOut,
 )
 from app.services import nodes as node_service
+from app.services import office_convert
 from app.services.archive import build_zip, extract_archive, zip_response
 from app.services.documents import apply_sheet_edits, build_pdf_page_edit
 from app.services.indexer import enqueue_index
@@ -418,6 +419,76 @@ async def save_pdf_pages(
     await db.commit()
     enqueue_index([node.id])
     return node_service.node_to_dict(node)
+
+
+_CONVERTIBLE_PDF_SOURCES = {
+    ".docx",
+    ".xlsx",
+    ".xlsm",
+    ".pptx",
+    ".odt",
+    ".ods",
+    ".odp",
+    ".csv",
+    ".rtf",
+}
+
+
+@router.post("/nodes/{node_id}/convert/pdf", response_model=NodeOut)
+async def convert_node_to_pdf(
+    node_id: uuid.UUID,
+    name: str | None = Query(default=None, max_length=255),
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    """Convert an Office document into a PDF via the OnlyOffice converter."""
+    node = await node_service.get_node_for(db, node_id, user)
+    if node.kind != "file" or not node.storage_key:
+        raise node_service.NodeError("This node has no content", status_code=404)
+    extension = node_service.extension_of(node.name)
+    if extension not in _CONVERTIBLE_PDF_SOURCES:
+        raise node_service.NodeError(
+            "This file type cannot be converted to PDF", status_code=415
+        )
+    if not settings.office_conversion_available:
+        raise node_service.NodeError("PDF conversion is not configured", status_code=503)
+    data = await storage.read_bytes(node.storage_key)
+    try:
+        pdf = await anyio.to_thread.run_sync(
+            partial(
+                office_convert.convert_document,
+                data,
+                extension,
+                target="pdf",
+                title=node.name,
+            )
+        )
+    except office_convert.OfficeConversionError as exc:
+        raise node_service.NodeError(
+            f"Cannot convert to PDF: {exc}", status_code=502
+        ) from exc
+    if len(pdf) > settings.max_upload_mb * 1024 * 1024:
+        raise node_service.NodeError(
+            f"File exceeds {settings.max_upload_mb} MB limit", status_code=413
+        )
+    target_name = name or f"{node.name.rsplit('.', 1)[0]}.pdf"
+    target_name = node_service.sanitize_name(target_name)
+    if not target_name.lower().endswith(".pdf"):
+        target_name = f"{target_name}.pdf"
+    parent_id = node.parent_id or node.project_id
+    if parent_id is None:
+        raise node_service.NodeError("The file has no parent folder", status_code=400)
+    created, _ = await node_service.create_file(
+        db,
+        parent_id,
+        target_name,
+        pdf,
+        created_by=user.username,
+        note=f"converted from {node.name}",
+    )
+    await db.commit()
+    enqueue_index([created.id])
+    return node_service.node_to_dict(created)
 
 
 @router.get("/nodes/{node_id}/versions", response_model=list[VersionOut])
