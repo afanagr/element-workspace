@@ -7,13 +7,12 @@ sanitiser is still applied so directory listings and ZIPs stay clean.
 
 from __future__ import annotations
 
-import io
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings

@@ -14,6 +14,11 @@ from app.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# The only embedding backend this application ships with. Chat connections are
+# text-only endpoints, so vectors are always produced locally.
+EMBEDDING_PROVIDER_NAME = "local"
+EMBEDDING_PROVIDER_LABEL = "Local sentence-transformers"
+
 
 def local_embeddings_available() -> bool:
     """True when sentence-transformers is installed in this image."""
@@ -26,9 +31,9 @@ def local_embeddings_available() -> bool:
 class LocalEmbeddingProvider(LLMProvider):
     """CPU-only embedding backend.
 
-    Used when ``EMBEDDING_PROVIDER=local`` (the automatic choice when the chat
-    provider has no native embedding endpoint). Model files are downloaded on
-    first use into ``HF_HOME`` which is a volume, so restarts stay offline-fast.
+    The only embedding implementation: chat connections are text-only, so RAG
+    always uses this provider. Model files are downloaded on first use into
+    ``HF_HOME`` which is a volume, so restarts stay offline-fast.
     """
 
     name = "local"
@@ -71,7 +76,7 @@ class LocalEmbeddingProvider(LLMProvider):
             except ImportError as exc:  # pragma: no cover - depends on build arg
                 raise ProviderError(
                     "sentence-transformers is not installed in this image. "
-                    "Rebuild with INSTALL_LOCAL_EMBEDDINGS=1 or choose another EMBEDDING_PROVIDER.",
+                    "Rebuild the backend image with INSTALL_LOCAL_EMBEDDINGS=1.",
                     provider=self.name,
                     code="dependency_missing",
                 ) from exc

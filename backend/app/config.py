@@ -5,7 +5,6 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 INSECURE_SECRETS = {"", "change-me", "change-me-please-use-a-long-random-string", "dev-insecure-secret-change-me"}
@@ -40,38 +39,16 @@ class Settings(BaseSettings):
     workspace_dir: Path = Path("/data/workspace")
 
     # ---------------------------------------------------------------- llm
-    # Chat providers: DeepSeek (cloud) plus Qwen in two flavours - the cloud
-    # DashScope API and a local OpenAI-compatible server (Ollama, vLLM, ...).
-    # Individual accounts normally get their own key from an administrator; the
-    # values below are deployment-wide fallbacks and endpoint overrides.
-    llm_provider: str = "deepseek"
-    llm_model: str = "deepseek-chat"
-    deepseek_api_key: str = ""
-    deepseek_base_url: str = "https://api.deepseek.com"
-
-    # Qwen cloud (Alibaba Cloud DashScope, OpenAI-compatible mode).
-    qwen_api_key: str = ""
-    # Accepted alias for deployments that already export DASHSCOPE_API_KEY.
-    dashscope_api_key: str = ""
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen-plus"
-
-    # Local Qwen: leave QWEN_LOCAL_BASE_URL empty to disable the provider.
-    # Ollama: http://localhost:11434/v1 (inside Docker: http://host.docker.internal:11434/v1)
-    # vLLM/LM Studio: http://localhost:8000/v1
-    qwen_local_base_url: str = ""
-    qwen_local_api_key: str = ""
-    qwen_local_model: str = "qwen2.5:7b-instruct"
-
+    # Chat models are NOT configured here: every account owns a list of
+    # OpenAI-compatible connections (name, base URL, key, model) managed by an
+    # administrator in /admin -> Users (see ``app.llm.factory``).
     llm_request_timeout: float = 180.0
     llm_max_retries: int = 2
     max_agent_steps: int = 8
 
     # ---------------------------------------------------------- embeddings
-    # DeepSeek/Qwen chat endpoints expose no embedding API in this setup, so
-    # vectors are always computed locally.
-    embedding_provider: str = "local"
-    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # Vectors are always computed locally: the chat endpoints we talk to expose
+    # no embedding API.
     local_embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     embedding_batch_size: int = 32
 

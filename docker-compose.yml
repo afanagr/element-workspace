@@ -11,20 +11,15 @@ x-app-env: &app-env
   QDRANT_URL: http://qdrant:6333
   QDRANT_COLLECTION: ${QDRANT_COLLECTION:-workspace_documents}
   WORKSPACE_DIR: /data/workspace
-  # Legacy provider vars: only read by migration 0005; connections are per account.
-  LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+  # Legacy endpoints: read only by migration 0005 when it imports credentials
+  # from pre-v2 releases. Chat models are configured per account in /admin, so
+  # these six lines can be deleted after the upgrade.
   LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
-  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
   DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
-  QWEN_API_KEY: ${QWEN_API_KEY:-}
-  DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
   QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
   QWEN_MODEL: ${QWEN_MODEL:-qwen-plus}
   QWEN_LOCAL_BASE_URL: ${QWEN_LOCAL_BASE_URL:-}
-  QWEN_LOCAL_API_KEY: ${QWEN_LOCAL_API_KEY:-}
   QWEN_LOCAL_MODEL: ${QWEN_LOCAL_MODEL:-qwen2.5:7b-instruct}
-  EMBEDDING_PROVIDER: local
-  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
   LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
   CHUNK_SIZE: ${CHUNK_SIZE:-1200}
   CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}

@@ -11,9 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db import get_db
 from app.deps import current_user
-from app.llm.catalog import EMBEDDING_PROVIDERS
 from app.llm.factory import registry
-from app.llm.local_embeddings import local_embeddings_available
+from app.llm.local_embeddings import EMBEDDING_PROVIDER_NAME, local_embeddings_available
 from app.llm.schemas import NoProviderAvailable, ProviderError
 from app.logging_config import get_logger
 from app.models import User
@@ -143,7 +142,7 @@ async def test_embeddings(
     provider: str | None = None, model: str | None = None
 ) -> dict[str, Any]:
     """Local embeddings power RAG; the test simply embeds a probe string."""
-    if provider and provider not in EMBEDDING_PROVIDERS:
+    if provider and provider != EMBEDDING_PROVIDER_NAME:
         raise HTTPException(
             status_code=400,
             detail=f"Embedding provider '{provider}' is not available - only local embeddings are used",
@@ -178,7 +177,6 @@ async def get_settings(
         "embedding_providers": await registry.embedding_options(),
         "secret_key_insecure": settings.secret_key_is_insecure,
         "max_upload_mb": settings.max_upload_mb,
-        "auth_enabled": True,
         "user": user_service.user_to_dict(user, connections=connections),
         "admin_password_is_default": settings.admin_password_is_default,
     }

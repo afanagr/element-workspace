@@ -38,7 +38,6 @@ def _create_table(name: str, tables: set[str]) -> None:
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
     tables = _tables()
 
     _create_table("users", tables)
@@ -72,10 +71,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
     tables = _tables()
-    if "provider_credentials" not in tables and "provider_credentials" in Base.metadata.tables:
-        pass  # the table was dropped on purpose; nothing to restore here
 
     for table, names in (
         ("chat_sessions", ("ix_chat_sessions_owner_id", "fk_chat_sessions_owner_id_users")),

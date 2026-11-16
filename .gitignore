@@ -15,7 +15,6 @@ frontend/public/pdf.worker.min.mjs
 *.tsbuildinfo
 data/
 .tools/
-.venv/
 .docker/
 .vscode/
 .DS_Store

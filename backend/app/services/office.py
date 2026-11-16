@@ -14,9 +14,12 @@ import hmac
 import json
 import time
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.config import settings
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.models import Node, User
 
 # Extensions that can be edited in the Document Server. Legacy formats (.doc,
 # .xls, .ppt) are intentionally excluded: OnlyOffice would save them back as

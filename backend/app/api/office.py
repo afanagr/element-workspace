@@ -20,7 +20,7 @@ from app.config import settings
 from app.db import get_db
 from app.deps import current_user
 from app.logging_config import get_logger
-from app.models import Node, User
+from app.models import User
 from app.services import nodes as node_service
 from app.services import office, office_convert
 from app.services.indexer import enqueue_index

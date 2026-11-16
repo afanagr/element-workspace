@@ -91,8 +91,6 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
             # probe only reports the local embedding backend.
             "configured": [],
             "embedding_configured": embedding_configured,
-            "default_provider": "",
-            "default_model": "",
             "details": [],
             "auth": "required",
         },

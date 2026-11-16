@@ -19,7 +19,6 @@ from app.llm.schemas import (
     ProviderError,
     StreamEnd,
     TextDelta,
-    ToolCall,
     ToolCallEvent,
 )
 from app.logging_config import get_logger

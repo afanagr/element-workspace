@@ -46,9 +46,6 @@ class User(Base, TimestampMixin):
     ``role`` is either ``admin`` or ``user``. Chat endpoints are not hard-coded:
     an administrator attaches one or more OpenAI-compatible connections to every
     account (name, base URL, API key, model), see :class:`ModelConnection`.
-
-    The ``deepseek_*`` / ``qwen_*`` / ``provider_base_urls`` columns are legacy
-    (pre-0005) and are kept only so the data migration could copy them.
     """
 
     __tablename__ = "users"
@@ -59,14 +56,6 @@ class User(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(String(16), default="user", nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    # --- legacy per-provider columns (superseded by model_connections) ---
-    deepseek_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    deepseek_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    qwen_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    qwen_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    qwen_local_api_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    qwen_local_model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    provider_base_urls: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     @property
     def is_admin(self) -> bool:

@@ -16,9 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.llm.base import LLMProvider, ProviderHealth
-from app.llm.catalog import EMBEDDING_MODELS, EMBEDDING_PROVIDERS
 from app.llm.compatible_provider import CompatibleProvider
-from app.llm.local_embeddings import LocalEmbeddingProvider, local_embeddings_available
+from app.llm.local_embeddings import (
+    EMBEDDING_PROVIDER_LABEL,
+    EMBEDDING_PROVIDER_NAME,
+    LocalEmbeddingProvider,
+    local_embeddings_available,
+)
 from app.llm.schemas import NoProviderAvailable
 from app.logging_config import get_logger
 from app.models import ModelConnection, User
@@ -275,15 +279,14 @@ class ProviderRegistry:
         return ResolvedEmbedding(self._local, "local", chosen)
 
     async def embedding_options(self) -> list[dict[str, Any]]:
-        available = local_embeddings_available()
+        """The single embedding backend this deployment supports."""
         return [
             {
-                "name": name,
-                "label": {"local": "Local sentence-transformers"}.get(name, name.title()),
-                "configured": available,
-                "models": list(EMBEDDING_MODELS.get(name, ())),
+                "name": EMBEDDING_PROVIDER_NAME,
+                "label": EMBEDDING_PROVIDER_LABEL,
+                "configured": local_embeddings_available(),
+                "models": [settings.local_embedding_model],
             }
-            for name in EMBEDDING_PROVIDERS
         ]
 
     # -------------------------------------------------------------- health

@@ -20,7 +20,7 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 
-from app.config import settings
+from app.legacy_settings import migration_defaults as legacy
 from app.models import Base
 
 revision = "0005_model_connections"
@@ -77,30 +77,29 @@ def _legacy_candidates(row: Any, columns: set[str]) -> list[dict[str, Any]]:
         candidates.append(
             {
                 "name": "DeepSeek",
-                "base_url": _url(overrides, "deepseek", settings.deepseek_base_url),
+                "base_url": _url(overrides, "deepseek", legacy.deepseek_base_url),
                 "api_key_enc": deepseek_key,
-                "model": deepseek_model or settings.llm_model or "deepseek-chat",
+                "model": deepseek_model or legacy.llm_model or "deepseek-chat",
             }
         )
     if qwen_key or qwen_model:
         candidates.append(
             {
                 "name": "Qwen",
-                "base_url": _url(overrides, "qwen", settings.qwen_base_url)
-                or DEFAULT_QWEN_URL,
+                "base_url": _url(overrides, "qwen", legacy.qwen_base_url) or DEFAULT_QWEN_URL,
                 "api_key_enc": qwen_key,
-                "model": qwen_model or settings.qwen_model or "qwen-plus",
+                "model": qwen_model or legacy.qwen_model or "qwen-plus",
             }
         )
     if local_key or local_model:
-        local_url = _url(overrides, "qwen-local", settings.qwen_local_base_url)
+        local_url = _url(overrides, "qwen-local", legacy.qwen_local_base_url)
         if local_url:
             candidates.append(
                 {
                     "name": "Qwen (local)",
                     "base_url": local_url,
                     "api_key_enc": local_key,
-                    "model": local_model or settings.qwen_local_model or "qwen2.5:7b-instruct",
+                    "model": local_model or legacy.qwen_local_model or "qwen2.5:7b-instruct",
                 }
             )
     return candidates

@@ -260,8 +260,11 @@ workspace keeps working.
 
 Older releases kept single DeepSeek/Qwen credentials in `users.deepseek_*` /
 `qwen_*`. Migration `0005_model_connections` copies them into model connections, so
-nothing is lost; the `DEEPSEEK_*` / `QWEN_*` environment variables are now read only
-by that migration.
+nothing is lost, and `0006_drop_legacy_provider_columns` then removes those columns
+from `users`. The six legacy variables left in `.env.example` (`LLM_MODEL`,
+`DEEPSEEK_BASE_URL`, `QWEN_BASE_URL`, `QWEN_MODEL`, `QWEN_LOCAL_BASE_URL`,
+`QWEN_LOCAL_MODEL`) are read only by that migration - API keys are never taken from
+the environment; they live encrypted in `model_connections`.
 
 ### Models
 
@@ -510,7 +513,7 @@ AI-created XLSX with a second sheet, ZIP download/extract and operation undo.
 | Files stay `queued` | worker not running (`docker compose logs worker`) — the API watchdog indexes in-process after 25 s. |
 | `index failed` on PDF | check that Tesseract is present in the image (`docker compose exec backend tesseract --list-langs`); OCR can be disabled with `OCR_PDF_ENABLED=false`. |
 | Legacy `.doc` shows text only | the viewer falls back to extracted text (`antiword`/`catdoc`); download the original for exact layout. |
-| `RAG off` chip | no embedding provider configured or Qdrant unhealthy. Set `EMBEDDING_PROVIDER=local` and install sentence-transformers. |
+| `RAG off` chip | Qdrant is unhealthy or sentence-transformers is missing. Rebuild the backend image with `INSTALL_LOCAL_EMBEDDINGS=1` (`docker compose up -d --build backend`). |
 | Keys “lost” after restart | `APP_SECRET_KEY` changed → stored ciphertext cannot be decrypted; re-enter keys. |
 | Chat stops mid-answer | provider error after the first token is surfaced (retries intentionally apply before the first token only). |
 | OnlyOffice editor is blank / “API failed to load” | `docker compose ps` must show `documentserver` healthy; the browser must reach `ONLYOFFICE_URL` (port `8081`). |

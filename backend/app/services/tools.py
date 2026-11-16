@@ -26,7 +26,7 @@ from app.services import nodes as node_service
 from app.services import office_convert
 from app.services.documents import build_pdf_parts, build_text_document, pdf_page_count
 from app.services.indexer import enqueue_index
-from app.services.parsing import UnsupportedFormat, parse_document
+from app.services.parsing import parse_document
 from app.services.storage import storage
 from app.services.vectorstore import vector_store
 

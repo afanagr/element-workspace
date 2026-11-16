@@ -82,7 +82,6 @@ export interface SettingsResponse {
   embedding_providers: EmbeddingProviderInfo[];
   secret_key_insecure: boolean;
   max_upload_mb: number;
-  auth_enabled: boolean;
   user: UserInfo;
   admin_password_is_default: boolean;
 }
@@ -154,8 +153,6 @@ export interface HealthResponse {
   providers: {
     configured: string[];
     embedding_configured: string[];
-    default_provider: string;
-    default_model: string;
     details: ProviderInfo[];
   };
   banner: string | null;
