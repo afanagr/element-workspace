@@ -29,6 +29,9 @@ from app.logging_config import get_logger
 logger = get_logger(__name__)
 
 _CACHE_RE = re.compile(r"^[a-f0-9]{64}$")
+# Skew is estimated on a thumbnail: 500 px is enough to see text lines and keeps
+# the 25 rotation trials cheap even on A4 pages rendered at 300-400 DPI.
+_SKEW_SAMPLE_WIDTH = 500
 
 
 class OcrUnavailable(Exception):
@@ -144,6 +147,8 @@ def estimate_skew(image: Any, max_angle: float) -> float:
 
     Horizontal text produces sharp peaks in the row-ink profile, so the angle
     with the highest squared row sums is the one where the lines are aligned.
+    Coarse 0.5-degree trials on a thumbnail are followed by a 0.25-degree
+    refinement around the winner.
     """
     if max_angle <= 0:
         return 0.0
@@ -151,22 +156,39 @@ def estimate_skew(image: Any, max_angle: float) -> float:
     from PIL import Image
 
     sample = image
-    if sample.width > 900:
-        ratio = 900 / sample.width
-        sample = image.resize((900, max(1, int(sample.height * ratio))), Image.BILINEAR)
+    if sample.width > _SKEW_SAMPLE_WIDTH:
+        ratio = _SKEW_SAMPLE_WIDTH / sample.width
+        sample = image.resize(
+            (_SKEW_SAMPLE_WIDTH, max(1, int(sample.height * ratio))), Image.BILINEAR
+        )
+
+    def score(angle: float) -> float:
+        rotated = sample.rotate(angle, resample=Image.BILINEAR, fillcolor=255, expand=False)
+        try:
+            ink = (np.asarray(rotated, dtype=np.uint8) < 128).sum(axis=1).astype(np.float64)
+        finally:
+            rotated.close()
+        return float((ink * ink).sum())
+
     best_angle = 0.0
-    best_score = -1.0
+    best_score = score(0.0)
     try:
-        for step in range(int(-max_angle * 2), int(max_angle * 2) + 1):
-            angle = step / 2.0
-            rotated = sample.rotate(angle, resample=Image.BILINEAR, fillcolor=255, expand=False)
-            try:
-                ink = (np.asarray(rotated, dtype=np.uint8) < 128).sum(axis=1).astype(np.float64)
-            finally:
-                rotated.close()
-            score = float((ink * ink).sum())
-            if score > best_score:
-                best_score, best_angle = score, angle
+        steps = int(max_angle * 2)
+        for index in range(-steps, steps + 1):
+            angle = index / 2.0
+            if angle == 0.0:
+                continue
+            current = score(angle)
+            if current > best_score:
+                best_score, best_angle = current, angle
+        if abs(best_angle) >= 0.5:
+            for index in range(-2, 3):
+                angle = round(best_angle + index * 0.25, 2)
+                if angle == best_angle:
+                    continue
+                current = score(angle)
+                if current > best_score:
+                    best_score, best_angle = current, angle
     finally:
         if sample is not image:
             sample.close()
