@@ -523,6 +523,9 @@ AI-created XLSX with a second sheet, ZIP download/extract and operation undo.
 
 * Scanned PDFs use Tesseract (`rus+eng`, tessdata_best) with per-page detection; handwriting,
   stamps and complex tables are still weak — the next step is a stronger engine or a cloud OCR.
+* Generated DOCX supports headings, tables, inline formatting, code blocks and base64 images;
+  XLSX supports styles, number formats, merges, freeze panes and filters. Arbitrary layouts,
+  charts and images from arbitrary sources still need the planned Python sandbox.
 * Tool-call *deltas* are collapsed into one card per call (no partial argument view).
 * Excel editing supports `.xlsx`/`.xlsm`; `.xls` is read-only (write a new `.xlsx`).
 * Legacy `.doc`/`.xls`/`.ppt` stay on the built-in viewers: OnlyOffice would silently rewrite them

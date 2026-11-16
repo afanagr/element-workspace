@@ -65,6 +65,7 @@ MUTATING_TOOLS = frozenset(
         "excel_add_sheet",
         "translate_file",
         "create_pdf",
+        "convert_to_pdf",
         "pdf_split",
     }
 )
@@ -73,7 +74,8 @@ _ACTION_RE = re.compile(
     r"\b(добавь|добавьте|запиши|запишите|измени|измените|создай|создайте|удали|"
     r"удалите|переименуй|переименуйте|перемести|переместите|обнови|обновите|вставь|"
     r"вставьте|заполни|заполните|дополни|дополните|переведи|переведите|add|append|"
-    r"write|create|update|delete|remove|rename|move|insert|fill|edit|translate|put)\b",
+    r"write|create|update|delete|remove|rename|move|insert|fill|edit|translate|put|"
+    r"конверт|преобразуй|convert)\b",
     re.IGNORECASE,
 )
 _QUESTION_RE = re.compile(
@@ -105,11 +107,11 @@ NOT_APPLIED_NOTE = (
     "\n\n⚠️ Изменения не применены: модель не вызвала ни одного инструмента записи."
 )
 PDF_SPLIT_REMINDER = (
-    "This is a PDF split/extract request. create_pdf rebuilds plain text and drops all "
-    "images, so it is WRONG here. Call pdf_split with parts=[{name, pages}] and page "
-    "ranges (e.g. pages='1-3' or '4,7-9'); pdf_split copies pages as-is and keeps images. "
-    "If you already created text-only PDFs with create_pdf, delete them with delete_node "
-    "and then call pdf_split."
+    "This is a PDF split/extract request. create_pdf builds a brand-new document and cannot "
+    "carry pages or images over from an existing PDF, so it is WRONG here. Call pdf_split "
+    "with parts=[{name, pages}] and page ranges (e.g. pages='1-3' or '4,7-9'); pdf_split "
+    "copies pages as-is and keeps images. If you already created new PDFs with create_pdf, "
+    "delete them with delete_node and then call pdf_split."
 )
 PDF_NOT_SPLIT_NOTE = (
     "\n\n⚠️ PDF не разделён постранично: изображения могли не сохраниться. "
