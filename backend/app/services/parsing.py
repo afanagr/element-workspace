@@ -22,6 +22,7 @@ from app.logging_config import get_logger
 from app.services.ocr import (
     OcrUnavailable,
     PdfPageOcr,
+    ensure_tesseract,
     languages as ocr_languages,
     load_cached,
     store_cached,
@@ -172,14 +173,6 @@ def view_kind(name: str, mime: str | None = None) -> str:
     ):
         return "text"
     return "binary"
-
-
-def is_supported(name: str, data: bytes | None = None, mime: str | None = None) -> bool:
-    return (
-        extension_of(name) in SUPPORTED_EXTENSIONS
-        or is_textual(name, data)
-        or view_kind(name, mime) == "text"
-    )
 
 
 def _clean(value: Any) -> str:
@@ -431,16 +424,7 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
 def _parse_image(data: bytes) -> ParsedDocument:
     from PIL import Image
 
-    try:
-        import pytesseract
-    except ImportError as exc:  # pragma: no cover - image always installs it
-        raise OcrUnavailable("pytesseract is not installed") from exc
-
-    binary = settings.tesseract_cmd or "tesseract"
-    if settings.tesseract_cmd:
-        pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
-    if shutil.which(binary) is None:
-        raise OcrUnavailable("Tesseract OCR binary is not available in the container")
+    pytesseract = ensure_tesseract()
 
     with Image.open(io.BytesIO(data)) as image:
         image.load()
@@ -515,15 +499,5 @@ def parse_document(name: str, data: bytes, ocr: bool = False) -> ParsedDocument:
         logger.warning("Parsing %s failed: %s", name, exc)
         raise UnsupportedFormat(f"Could not parse {name}: {exc}") from exc
     raise UnsupportedFormat(f"Unsupported file type: {ext or 'unknown'}")
-
-
-_tesseract_available: bool | None = None
-
-
-def tesseract_available() -> bool:
-    global _tesseract_available
-    if _tesseract_available is None:
-        _tesseract_available = shutil.which(settings.tesseract_cmd or "tesseract") is not None
-    return _tesseract_available
 
 

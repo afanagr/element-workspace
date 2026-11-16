@@ -150,7 +150,7 @@ async def test_embeddings(
     if not local_embeddings_available():
         return {"ok": False, "message": "sentence-transformers is not installed in this image"}
     try:
-        resolved = await registry.resolve_embeddings(preferred=provider, model=model)
+        resolved = await registry.resolve_embeddings(model=model)
         service = EmbeddingService(resolved.provider, resolved.model)
         vector = await service.embed_query("connection test")
         return {

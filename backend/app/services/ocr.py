@@ -31,7 +31,8 @@ def languages() -> str:
     return (settings.ocr_lang or settings.tesseract_lang or "eng").strip()
 
 
-def _pytesseract() -> Any:
+def ensure_tesseract() -> Any:
+    """Import pytesseract, point it at the configured binary and check it exists."""
     try:
         import pytesseract
     except ImportError as exc:  # pragma: no cover - the image always installs it
@@ -64,7 +65,7 @@ def _deskew(image: Any) -> tuple[Any, int]:
     """Rotate pages that Tesseract's orientation detector considers sideways."""
     if not settings.ocr_deskew:
         return image, 0
-    pytesseract = _pytesseract()
+    pytesseract = ensure_tesseract()
     try:
         osd = pytesseract.image_to_osd(image, output_type=pytesseract.Output.DICT)
     except Exception:  # noqa: BLE001 - OSD fails on sparse/blank pages
@@ -103,7 +104,7 @@ class PdfPageOcr:
             page.close()
 
     def recognize(self, index: int) -> tuple[str, dict[str, Any]]:
-        pytesseract = _pytesseract()
+        pytesseract = ensure_tesseract()
         image = preprocess(self.render(index))
         image, rotation = _deskew(image)
         started = time.monotonic()

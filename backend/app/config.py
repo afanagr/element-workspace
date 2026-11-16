@@ -83,9 +83,9 @@ class Settings(BaseSettings):
     ocr_min_orientation_confidence: float = 1.0
 
     # --------------------------------------------------------- onlyoffice
-    # OnlyOffice Document Server replaces the built-in editors when configured.
-    # Set ONLYOFFICE_ENABLED=false (or clear the URL/secret) to fall back to the
-    # legacy in-app viewers; the previous implementation is kept in the repo.
+    # Office documents are edited (and converted to PDF) by the OnlyOffice
+    # Document Server. Set ONLYOFFICE_ENABLED=false (or clear the URL/secret) to
+    # disable the editor; such files then fall back to the read-only preview.
     onlyoffice_enabled: bool = False
     onlyoffice_url: str = ""  # public URL the browser loads api.js from
     onlyoffice_jwt_secret: str = ""

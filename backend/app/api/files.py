@@ -227,7 +227,7 @@ def _text_preview(node: Node, parsed: ParsedDocument, max_chars: int) -> TextPre
 @router.get("/nodes/{node_id}/text", response_model=TextPreviewOut)
 async def node_text(
     node_id: uuid.UUID,
-    max_chars: int = Query(default=60000, ge=1000, le=200000),
+    max_chars: int = Query(default=settings.max_text_preview_chars, ge=1000, le=200000),
     db: AsyncSession = Depends(get_db),
     user: User = CurrentUser,
 ) -> TextPreviewOut:
@@ -247,7 +247,7 @@ async def node_text(
 @router.post("/nodes/{node_id}/ocr", response_model=TextPreviewOut)
 async def node_ocr(
     node_id: uuid.UUID,
-    max_chars: int = Query(default=60000, ge=1000, le=200000),
+    max_chars: int = Query(default=settings.max_text_preview_chars, ge=1000, le=200000),
     db: AsyncSession = Depends(get_db),
     user: User = CurrentUser,
 ) -> TextPreviewOut:

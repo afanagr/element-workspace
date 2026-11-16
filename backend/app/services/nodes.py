@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -103,10 +103,6 @@ def is_text_editable(node: Node) -> bool:
                ".odt", ".ods", ".rtf", ".epub"):
         return False
     return (node.mime or "").startswith("text/") or is_textual(node.name)
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 # ------------------------------------------------------------------- lookups

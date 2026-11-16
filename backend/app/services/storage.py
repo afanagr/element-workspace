@@ -48,13 +48,6 @@ class Storage:
             raise StorageError("File content is missing from storage")
         return await anyio.to_thread.run_sync(path.read_bytes)
 
-    async def read_text(self, key: str, max_chars: int | None = None) -> str:
-        data = await self.read_bytes(key)
-        text = decode_bytes(data)
-        if max_chars is not None and len(text) > max_chars:
-            return text[:max_chars] + "\n…[truncated]"
-        return text
-
     def open_path(self, key: str) -> Path:
         path = self.path_for(key)
         if not path.exists():
@@ -78,50 +71,6 @@ class Storage:
 
         await anyio.to_thread.run_sync(_write)
         return key, len(data), digest
-
-    async def save_stream(self, source, max_bytes: int) -> tuple[str, int, str]:
-        """Write an uploaded stream to disk while enforcing a size limit."""
-        key = uuid.uuid4().hex
-        target = self.path_for(key)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256()
-        size = 0
-        chunk_size = 1024 * 1024
-        tmp = target.with_suffix(".part")
-        try:
-            with open(tmp, "wb") as handle:
-                while True:
-                    chunk = await source.read(chunk_size)
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise StorageError(
-                            f"File exceeds the {settings.max_upload_mb} MB upload limit"
-                        )
-                    digest.update(chunk)
-                    handle.write(chunk)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp, target)
-        except Exception:
-            tmp.unlink(missing_ok=True)
-            raise
-        return key, size, digest.hexdigest()
-
-    async def write_bytes(self, key: str, data: bytes) -> tuple[int, str]:
-        if not _KEY_RE.match(key):
-            raise StorageError("Invalid storage key")
-        target = self.path_for(key)
-        target.parent.mkdir(parents=True, exist_ok=True)
-
-        def _write() -> None:
-            tmp = target.with_suffix(".part")
-            tmp.write_bytes(data)
-            os.replace(tmp, target)
-
-        await anyio.to_thread.run_sync(_write)
-        return len(data), hashlib.sha256(data).hexdigest()
 
     def delete(self, key: str | None) -> None:
         if not key:

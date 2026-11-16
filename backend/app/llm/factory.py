@@ -266,17 +266,12 @@ class ProviderRegistry:
         return [self._view(connection) for connection in connections]
 
     # -------------------------------------------------------- embeddings
-    async def resolve_embeddings(
-        self,
-        db: AsyncSession | None = None,
-        preferred: str | None = None,
-        model: str | None = None,
-    ) -> ResolvedEmbedding:
+    async def resolve_embeddings(self, model: str | None = None) -> ResolvedEmbedding:
         """Vectors are always produced locally; chat endpoints are text-only."""
         if self._local is None:
             self._local = LocalEmbeddingProvider(settings.local_embedding_model)
         chosen = (model or "").strip() or settings.local_embedding_model
-        return ResolvedEmbedding(self._local, "local", chosen)
+        return ResolvedEmbedding(self._local, EMBEDDING_PROVIDER_NAME, chosen)
 
     async def embedding_options(self) -> list[dict[str, Any]]:
         """The single embedding backend this deployment supports."""

@@ -295,16 +295,6 @@ class OpenAIProvider(LLMProvider):
             return
         raise ProviderError(f"{self.label}: retries exhausted", provider=self.name, retryable=True)
 
-    # -------------------------------------------------------- embeddings
-    async def embed(self, texts: Sequence[str], *, model: str | None = None) -> list[list[float]]:
-        resolved = model or getattr(self, "default_embed_model", "text-embedding-3-small")
-        try:
-            response = await self._client.embeddings.create(model=resolved, input=list(texts))
-        except Exception as exc:  # noqa: BLE001
-            raise map_openai_error(exc, self.name) from exc
-        items = sorted(response.data, key=lambda item: item.index)
-        return [list(item.embedding) for item in items]
-
     # ------------------------------------------------------------ health
     async def list_models(self) -> list[str]:
         try:

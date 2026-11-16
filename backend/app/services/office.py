@@ -134,12 +134,6 @@ def decode_jwt(token: str) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------- config
-def supports_office(name: str) -> bool:
-    from app.services.parsing import extension_of
-
-    return extension_of(name) in OFFICE_EXTENSIONS
-
-
 def build_editor_config(node: "Node", user: "User") -> dict[str, Any]:
     """Return ``{config, documentServerUrl}`` for ``DocsAPI.DocEditor``."""
     from app.services.parsing import extension_of

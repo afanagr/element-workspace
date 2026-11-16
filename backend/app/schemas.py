@@ -185,15 +185,6 @@ class RagQueryOut(BaseModel):
     error: str | None = None
 
 
-class HealthOut(BaseModel):
-    status: str
-    version: str
-    checks: dict[str, Any] = Field(default_factory=dict)
-    providers: dict[str, Any] = Field(default_factory=dict)
-    banner: str | None = None
-    warnings: list[str] = Field(default_factory=list)
-
-
 # -------------------------------------------------------------------- auth
 class LoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=64)

@@ -249,16 +249,6 @@ class Operation(Base):
     )
 
 
-class AppSetting(Base):
-    __tablename__ = "app_settings"
-
-    key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    value: Mapped[Any] = mapped_column(JSONB, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow, server_default=func.now(), nullable=False
-    )
-
-
 class LLMLog(Base):
     """Observability for provider calls: provider, model, tokens, latency."""
 

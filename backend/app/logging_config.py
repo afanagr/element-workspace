@@ -10,11 +10,6 @@ from app.config import settings
 _CONFIGURED = False
 
 
-class _ShortNameFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - trivial
-        return True
-
-
 def configure_logging() -> None:
     global _CONFIGURED
     if _CONFIGURED:

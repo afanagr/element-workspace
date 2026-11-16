@@ -258,8 +258,9 @@ TOOL_SPECS: list[ToolSpec] = [
 TOOL_NAMES = {spec.name for spec in TOOL_SPECS}
 
 
-def tool_specs(include_translate: bool = True) -> list[ToolSpec]:
-    return [spec for spec in TOOL_SPECS if include_translate or spec.name != "translate_file"]
+def tool_specs() -> list[ToolSpec]:
+    """Every tool the agent may call, in the order they are advertised."""
+    return list(TOOL_SPECS)
 
 
 # --------------------------------------------------------------- operations

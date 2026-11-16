@@ -71,7 +71,7 @@ async def index_node(node_id: str | uuid.UUID) -> str:
                 logger.info("Indexed %s with 0 chunks (%s)", node.name, reason)
                 return "indexed"
 
-            resolved = await registry.resolve_embeddings(db)
+            resolved = await registry.resolve_embeddings()
             service = EmbeddingService(resolved.provider, resolved.model)
             vectors = await service.embed_documents([chunk.text for chunk in chunks])
             path = await node_path(db, node)

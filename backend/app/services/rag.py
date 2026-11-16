@@ -82,7 +82,7 @@ async def retrieve(
     if not project_id:
         return RetrievalResult(error="project_id is required for retrieval")
     try:
-        resolved = await registry.resolve_embeddings(db)
+        resolved = await registry.resolve_embeddings()
     except NoProviderAvailable as exc:
         return RetrievalResult(error=str(exc))
     service = EmbeddingService(resolved.provider, resolved.model)

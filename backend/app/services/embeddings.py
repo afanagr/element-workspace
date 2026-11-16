@@ -17,11 +17,6 @@ class EmbeddingService:
     def __init__(self, provider: LLMProvider, model: str) -> None:
         self.provider = provider
         self.model = model
-        self._dimension: int | None = None
-
-    @property
-    def dimension(self) -> int | None:
-        return self._dimension
 
     async def _embed_batch(self, batch: Sequence[str]) -> list[list[float]]:
         attempts = max(1, settings.llm_max_retries + 1)
@@ -56,13 +51,10 @@ class EmbeddingService:
         for start in range(0, len(cleaned), size):
             batch = cleaned[start : start + size]
             vectors.extend(await self._embed_batch(batch))
-        if vectors:
-            self._dimension = len(vectors[0])
         return vectors
 
     async def embed_query(self, text: str) -> list[float]:
         vectors = await self._embed_batch([text])
         if not vectors:
             raise ProviderError("Empty query embedding", provider=self.provider.name)
-        self._dimension = len(vectors[0])
         return vectors[0]
