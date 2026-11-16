@@ -48,18 +48,23 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
 
 const MARKDOWN_EXT = new Set(['.md', '.markdown']);
 
-export function TextViewer({ node }: { node: WorkNode }) {
+export function TextViewer({ node, onSaved }: { node: WorkNode; onSaved?: () => void }) {
   const { t } = useI18n();
   const [preview, setPreview] = useState<TextPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [raw, setRaw] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setPreview(null);
+    setEditing(false);
+    setDraft('');
     void (async () => {
       try {
         const result = await api.text(node.id);
@@ -92,6 +97,36 @@ export function TextViewer({ node }: { node: WorkNode }) {
   if (!preview) return null;
 
   const isMarkdown = MARKDOWN_EXT.has(node.extension);
+  const dirty = editing && preview ? draft !== preview.text : false;
+
+  const startEdit = () => {
+    if (!preview) return;
+    setDraft(preview.text);
+    setRaw(true);
+    setEditing(true);
+    setError(null);
+  };
+
+  const cancelEdit = () => {
+    if (dirty && !window.confirm(t('text.discardConfirm'))) return;
+    setEditing(false);
+    setDraft('');
+  };
+
+  const save = async () => {
+    if (!preview || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.saveText(node.id, draft);
+      setEditing(false);
+      onSaved?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -101,16 +136,60 @@ export function TextViewer({ node }: { node: WorkNode }) {
         {preview.truncated ? (
           <span className="chip text-amber-600">{t('text.truncated')}</span>
         ) : null}
+        {dirty ? <span className="chip text-amber-600">{t('text.unsaved')}</span> : null}
         <div className="ml-auto flex gap-1">
-          {isMarkdown ? (
-            <button type="button" className="btn" onClick={() => setRaw((value) => !value)}>
-              {raw ? t('text.rendered') : t('text.raw')}
-            </button>
-          ) : null}
+          {editing ? (
+            <>
+              <button type="button" className="btn" onClick={cancelEdit} disabled={saving}>
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => void save()}
+                disabled={saving || !dirty}
+                title="Ctrl/⌘+S"
+              >
+                {saving ? t('common.working') : t('common.save')}
+              </button>
+            </>
+          ) : (
+            <>
+              {isMarkdown ? (
+                <button type="button" className="btn" onClick={() => setRaw((value) => !value)}>
+                  {raw ? t('text.rendered') : t('text.raw')}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn"
+                onClick={startEdit}
+                disabled={preview.truncated}
+                title={preview.truncated ? t('text.editTooLarge') : t('text.editHint')}
+              >
+                ✎ {t('text.edit')}
+              </button>
+            </>
+          )}
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {isMarkdown && !raw ? (
+        {error ? <div className="mb-2 text-xs text-rose-600">{error}</div> : null}
+        {editing ? (
+          <textarea
+            className="h-full min-h-[320px] w-full resize-none rounded-md border border-slate-200 bg-transparent p-2 font-mono text-xs outline-none focus:border-indigo-400 dark:border-zinc-700"
+            value={draft}
+            spellCheck={false}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+                event.preventDefault();
+                void save();
+              }
+              if (event.key === 'Escape') cancelEdit();
+            }}
+          />
+        ) : isMarkdown && !raw ? (
           <Markdown content={formatted} />
         ) : (
           <Markdown

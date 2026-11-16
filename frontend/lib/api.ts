@@ -193,6 +193,16 @@ export const api = {
     return `${API_BASE}/api/nodes/${nodeId}/content${query ? `?${query}` : ''}`;
   },
   text: (nodeId: string) => request<TextPreview>(`/api/nodes/${nodeId}/text`),
+  saveText: (nodeId: string, content: string) =>
+    request<WorkNode>(`/api/nodes/${nodeId}/content`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
+  saveSheetCells: (nodeId: string, cells: { sheet: string; cell: string; value: string | null }[]) =>
+    request<WorkNode>(`/api/nodes/${nodeId}/sheet`, {
+      method: 'PUT',
+      body: JSON.stringify({ cells }),
+    }),
   versions: (nodeId: string) => request<VersionInfo[]>(`/api/nodes/${nodeId}/versions`),
   revertVersion: (nodeId: string, versionId: string) =>
     request<WorkNode>(`/api/nodes/${nodeId}/versions/${versionId}/revert`, { method: 'POST' }),

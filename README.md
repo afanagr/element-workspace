@@ -186,7 +186,7 @@ resize the chat (320 px … width minus 320 px for the viewer); double-click the
 │       │   └── factory.py      # per-account model connections + local embeddings
 │       ├── services/
 │       │   ├── storage.py      # blob store + decoding
-│       │   ├── parsing.py      # xlsx/xls/csv, docx/doc, pdf, OCR, text
+│       │   ├── parsing.py      # xlsx/xls/csv, docx/doc, pdf, OCR, text (incl. unknown text files)
 │       │   ├── chunking.py     # overlap-aware chunker with labels
 │       │   ├── documents.py    # xlsx/docx/pdf generators
 │       │   ├── nodes.py        # tree CRUD, versions, snapshots
@@ -311,6 +311,20 @@ The model calls `pdf_split` with `parts = [{name, pages}]`. Pages are copied as 
 embedded photos, scans, stamps and the original layout survive. Do **not** use `create_pdf` for
 this: it re-typesets extracted text and therefore loses images.
 
+### 2c. Edit a file directly (without chat)
+
+* **Text-like files** (`.txt`, `.md`, `.json`, `.yaml`, `.csv`-adjacent text, code, logs and
+  files with no/unknown extension whose bytes decode as text) open in the text viewer with
+  **✎ Edit**. Saving writes a new version and re-indexes the file
+  (`PUT /api/nodes/{id}/content`).
+* **`.xlsx` / `.xlsm`** open in the sheet viewer with **✎ Edit cells**. Changed cells are written
+  back with openpyxl as a new version (`PUT /api/nodes/{id}/sheet`); formulas, untouched cells
+  and sheet structure survive.
+* PDF/DOCX are read-only in the viewer - use `pdf_split` / chat tools or an external editor.
+
+Any upload whose bytes look like text (no NUL bytes, mostly printable) is accepted even with an
+unknown or missing extension, shown by the text viewer and indexed as plain text.
+
 ### 3. Edit an Excel file through chat
 
 > Add a sheet "Q4" to budget.xlsx and fill it with October/November/December = 1000/1200/900.
@@ -364,6 +378,7 @@ REST under `/api` (OpenAPI at `/api/docs`), JSON everywhere, NDJSON/WebSocket fo
 | GET | `/api/nodes/{id}/download` | file stream or ZIP for folders (`?token=` allowed) |
 | GET | `/api/nodes/{id}/content` | inline bytes (viewers) with ETag (`?token=` allowed) |
 | GET | `/api/nodes/{id}/text` | extracted text/segments/meta (viewers + OCR) |
+| PUT | `/api/nodes/{id}/content` · `/api/nodes/{id}/sheet` | save a directly edited text file / spreadsheet cells (new version + reindex) |
 | GET | `/api/nodes/{id}/versions` · POST `…/versions/{version_id}/revert` | history |
 | POST | `/api/nodes/{id}/reindex` | queue indexing for a file/folder/project |
 | GET | `/api/index/status` | counts by status, chunks, vectors (own files) |

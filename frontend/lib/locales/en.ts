@@ -144,6 +144,10 @@ export const en: Record<string, string> = {
   'excel.failed': 'Failed to read spreadsheet: {error}',
   'excel.rows': '{count} row(s) · first 60 columns',
   'excel.empty': 'This sheet is empty.',
+  'excel.edit': 'Edit cells',
+  'excel.editHint': 'Edit cell values directly; saving creates a new version.',
+  'excel.changes': '{count} changed cell(s)',
+  'excel.discardConfirm': 'Discard unsaved cell changes?',
 
   // ------------------------------------------------------------------ docx
   'docx.loading': 'Converting document…',
@@ -170,6 +174,11 @@ export const en: Record<string, string> = {
   'text.truncated': 'truncated view',
   'text.raw': 'Raw',
   'text.rendered': 'Rendered',
+  'text.edit': 'Edit',
+  'text.editHint': 'Edit the file directly; saving creates a new version.',
+  'text.editTooLarge': 'This file is too large to edit safely (the view is truncated).',
+  'text.unsaved': 'unsaved changes',
+  'text.discardConfirm': 'Discard unsaved changes?',
 
   // --------------------------------------------------------------- extract
   'extract.loading': 'Extracting text…',

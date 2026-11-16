@@ -22,11 +22,28 @@ from app.services.storage import decode_bytes
 logger = get_logger(__name__)
 
 TEXT_EXTENSIONS = {
-    ".txt", ".md", ".markdown", ".rst", ".log", ".json", ".jsonl", ".yaml", ".yml", ".toml",
-    ".ini", ".cfg", ".conf", ".env", ".xml", ".html", ".htm", ".css", ".scss", ".js", ".mjs",
-    ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rb", ".go", ".rs", ".java", ".kt", ".c", ".h",
-    ".cpp", ".hpp", ".cs", ".php", ".sh", ".bash", ".ps1", ".sql", ".graphql", ".vue", ".svelte",
+    ".txt", ".md", ".markdown", ".mdx", ".rst", ".adoc", ".asciidoc", ".org", ".log",
+    ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".properties",
+    ".env", ".xml", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".js", ".mjs",
+    ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rb", ".go", ".rs", ".java", ".kt", ".kts",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cs", ".php", ".sh", ".bash", ".zsh", ".fish",
+    ".ps1", ".psm1", ".bat", ".cmd", ".sql", ".graphql", ".gql", ".vue", ".svelte",
+    ".astro", ".tex", ".bib", ".sty", ".cls", ".lua", ".pl", ".pm", ".r", ".dart",
+    ".swift", ".scala", ".clj", ".cljs", ".ex", ".exs", ".erl", ".hrl", ".hs", ".lhs",
+    ".ml", ".mli", ".nim", ".zig", ".v", ".sv", ".vhd", ".asm", ".s", ".m", ".mm",
+    ".f", ".f90", ".for", ".pas", ".dpr", ".vb", ".vbs", ".groovy", ".gradle", ".proto",
+    ".tf", ".tfvars", ".hcl", ".sol", ".tsv", ".diff", ".patch", ".lock", ".gitignore",
+    ".gitattributes", ".editorconfig", ".dockerignore", ".npmrc", ".nvmrc", ".prettierrc",
+    ".eslintrc", ".babelrc", ".htaccess", ".mailmap",
 }
+_TEXT_FILENAMES = {
+    "dockerfile", "makefile", "gnumakefile", "cmakelists.txt", "readme", "license",
+    "changelog", "contributing", "authors", "notice", "procfile", "gemfile", "rakefile",
+    "vagrantfile", "jenkinsfile", "justfile", "brewfile", "docker-compose",
+}
+_TEXT_FILENAME_PREFIXES = (
+    "dockerfile", "makefile", "readme", "license", "changelog", "contributing", ".env",
+)
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif", ".bmp", ".gif"}
 EXCEL_EXTENSIONS = {".xlsx", ".xlsm", ".xls", ".csv"}
 WORD_EXTENSIONS = {".docx", ".doc"}
@@ -102,7 +119,37 @@ def detect_mime(name: str) -> str:
     return MIME_BY_EXTENSION.get(extension_of(name), "application/octet-stream")
 
 
-def view_kind(name: str) -> str:
+def _is_text_name(name: str) -> bool:
+    lower = (name or "").strip().lower()
+    if lower in _TEXT_FILENAMES:
+        return True
+    return any(lower.startswith(prefix) for prefix in _TEXT_FILENAME_PREFIXES)
+
+
+def is_text_bytes(data: bytes) -> bool:
+    """Heuristic: the bytes look like a text file (no NULs, mostly printable)."""
+    sample = data[:8192]
+    if b"\x00" in sample:
+        return False
+    if not sample:
+        return True
+    try:
+        text = decode_bytes(sample)
+    except Exception:  # noqa: BLE001 - charset detection failed
+        return False
+    if not text:
+        return False
+    printable = sum(1 for char in text if char.isprintable() or char in "\n\r\t")
+    return printable / len(text) > 0.9
+
+
+def is_textual(name: str, data: bytes | None = None) -> bool:
+    if extension_of(name) in TEXT_EXTENSIONS or _is_text_name(name):
+        return True
+    return data is not None and is_text_bytes(data)
+
+
+def view_kind(name: str, mime: str | None = None) -> str:
     ext = extension_of(name)
     if ext in EXCEL_EXTENSIONS:
         return "excel"
@@ -112,13 +159,22 @@ def view_kind(name: str) -> str:
         return "pdf"
     if ext in IMAGE_EXTENSIONS:
         return "image"
-    if ext in TEXT_EXTENSIONS:
+    if ext in TEXT_EXTENSIONS or _is_text_name(name):
+        return "text"
+    if mime and (
+        mime.startswith("text/")
+        or mime in ("application/json", "application/xml", "application/x-yaml")
+    ):
         return "text"
     return "binary"
 
 
-def is_supported(name: str) -> bool:
-    return extension_of(name) in SUPPORTED_EXTENSIONS
+def is_supported(name: str, data: bytes | None = None, mime: str | None = None) -> bool:
+    return (
+        extension_of(name) in SUPPORTED_EXTENSIONS
+        or is_textual(name, data)
+        or view_kind(name, mime) == "text"
+    )
 
 
 def _clean(value: Any) -> str:
@@ -343,6 +399,9 @@ def parse_document(name: str, data: bytes) -> ParsedDocument:
         if ext in IMAGE_EXTENSIONS:
             return _parse_image(data)
         if ext in TEXT_EXTENSIONS:
+            return _parse_text(data)
+        if is_text_bytes(data):
+            # Any file a text editor can open is indexed as plain text.
             return _parse_text(data)
     except (UnsupportedFormat, OcrUnavailable):
         raise

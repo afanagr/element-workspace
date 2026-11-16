@@ -20,7 +20,9 @@ from app.schemas import (
     CreateProjectIn,
     ExtractResult,
     NodeOut,
+    SheetSaveIn,
     TextPreviewOut,
+    TextSaveIn,
     UpdateNodeIn,
     UploadItem,
     UploadResult,
@@ -28,6 +30,7 @@ from app.schemas import (
 )
 from app.services import nodes as node_service
 from app.services.archive import build_zip, extract_archive, zip_response
+from app.services.documents import apply_sheet_edits
 from app.services.indexer import enqueue_index
 from app.services.parsing import (
     OcrUnavailable,
@@ -221,7 +224,7 @@ async def node_text(
     return TextPreviewOut(
         node_id=node.id,
         name=node.name,
-        view_kind=view_kind(node.name),
+        view_kind=view_kind(node.name, node.mime),
         text=parsed.text[:max_chars],
         segments=[
             {"label": segment.label, "text": segment.text[:20000]} for segment in parsed.segments
@@ -229,6 +232,67 @@ async def node_text(
         meta=parsed.meta,
         truncated=len(parsed.text) > max_chars,
     )
+
+
+@router.put("/nodes/{node_id}/content", response_model=NodeOut)
+async def save_text_content(
+    node_id: uuid.UUID,
+    payload: TextSaveIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    """Save a text file edited directly in the viewer (creates a new version)."""
+    node = await node_service.get_node_for(db, node_id, user)
+    if not node_service.is_text_editable(node):
+        raise node_service.NodeError("This file type cannot be edited as text", status_code=415)
+    data = payload.content.encode("utf-8")
+    if len(data) > settings.max_upload_mb * 1024 * 1024:
+        raise node_service.NodeError(
+            f"File exceeds {settings.max_upload_mb} MB limit", status_code=413
+        )
+    await node_service.write_file(
+        db, node, data, created_by=user.username, note="edited in viewer"
+    )
+    await db.commit()
+    enqueue_index([node.id])
+    return node_service.node_to_dict(node)
+
+
+@router.put("/nodes/{node_id}/sheet", response_model=NodeOut)
+async def save_sheet_cells(
+    node_id: uuid.UUID,
+    payload: SheetSaveIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    """Apply direct cell edits to an .xlsx workbook (creates a new version)."""
+    node = await node_service.get_node_for(db, node_id, user)
+    if node.kind != "file" or not node.storage_key:
+        raise node_service.NodeError("This node has no editable content", status_code=404)
+    if node_service.extension_of(node.name) not in (".xlsx", ".xlsm"):
+        raise node_service.NodeError("Direct cell editing supports .xlsx/.xlsm only", status_code=415)
+    if len(payload.cells) > 5000:
+        raise node_service.NodeError("Too many cells in one request", status_code=413)
+    if not payload.cells:
+        return node_service.node_to_dict(node)
+    data = await storage.read_bytes(node.storage_key)
+    try:
+        updated = await anyio.to_thread.run_sync(
+            apply_sheet_edits, data, [cell.model_dump() for cell in payload.cells]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Saving sheet cells failed")
+        raise node_service.NodeError(f"Cannot save cells: {exc}", status_code=422) from exc
+    if len(updated) > settings.max_upload_mb * 1024 * 1024:
+        raise node_service.NodeError(
+            f"File exceeds {settings.max_upload_mb} MB limit", status_code=413
+        )
+    await node_service.write_file(
+        db, node, updated, created_by=user.username, note="edited in viewer"
+    )
+    await db.commit()
+    enqueue_index([node.id])
+    return node_service.node_to_dict(node)
 
 
 @router.get("/nodes/{node_id}/versions", response_model=list[VersionOut])

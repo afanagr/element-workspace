@@ -113,7 +113,7 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
   const renderBody = () => {
     if (node.kind !== 'file') return null;
     if (EXCEL_EXTENSIONS.has(node.extension)) {
-      return <ExcelViewer key={`${node.id}-${node.updated_at}`} node={node} />;
+      return <ExcelViewer key={`${node.id}-${node.updated_at}`} node={node} onSaved={onRefresh} />;
     }
     if (node.extension === '.docx') {
       return <DocxViewer key={`${node.id}-${node.updated_at}`} node={node} />;
@@ -125,7 +125,7 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
       return <ImageViewer node={node} onOpenNode={() => undefined} />;
     }
     if (node.view_kind === 'text') {
-      return <TextViewer key={`${node.id}-${node.updated_at}`} node={node} />;
+      return <TextViewer key={`${node.id}-${node.updated_at}`} node={node} onSaved={onRefresh} />;
     }
     return <ExtractViewer key={`${node.id}-${node.updated_at}`} node={node} />;
   };

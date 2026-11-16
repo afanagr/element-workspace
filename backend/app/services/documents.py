@@ -214,6 +214,60 @@ def build_pdf_parts(
     return output
 
 
+def apply_sheet_edits(data: bytes, cells: Sequence[dict[str, Any]]) -> bytes:
+    """Write cell values into an .xlsx workbook and return the new bytes.
+
+    ``cells`` = [{"sheet": "Sheet1", "cell": "B3", "value": "text"}]. Formulas are
+    kept when the value starts with ``=``; numeric strings become numbers.
+    """
+    from openpyxl import load_workbook
+    from openpyxl.utils.cell import coordinate_from_string
+
+    workbook = load_workbook(io.BytesIO(data))
+    try:
+        for item in cells:
+            sheet_name = str(item.get("sheet") or "").strip()
+            cell_ref = str(item.get("cell") or "").strip().upper()
+            if not sheet_name or not cell_ref:
+                raise ValueError("sheet and cell are required")
+            try:
+                coordinate_from_string(cell_ref)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"Invalid cell reference: {cell_ref}") from exc
+            worksheet = (
+                workbook[sheet_name]
+                if sheet_name in workbook.sheetnames
+                else workbook.create_sheet(title=sheet_name[:31])
+            )
+            worksheet[cell_ref] = _coerce_cell(item.get("value"))
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        return buffer.getvalue()
+    finally:
+        workbook.close()
+
+
+def _coerce_cell(value: Any) -> Any:
+    if value is None:
+        return None
+    text = str(value)
+    if not text.strip():
+        return None
+    if text.startswith("="):
+        return text
+    if text.isdigit() and len(text) > 1 and text.startswith("0"):
+        # Keep identifiers such as 007 or 00123 as text.
+        return text
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
 def build_text_document(name: str, text: str) -> bytes:
     """Generate bytes for a file name, choosing the right generator by extension."""
     from pathlib import Path

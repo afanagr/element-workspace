@@ -84,6 +84,20 @@ class TextPreviewOut(BaseModel):
     truncated: bool = False
 
 
+class TextSaveIn(BaseModel):
+    content: str = Field(max_length=5_000_000)
+
+
+class SheetCellIn(BaseModel):
+    sheet: str = Field(min_length=1, max_length=31)
+    cell: str = Field(min_length=2, max_length=16)
+    value: str | None = Field(default=None, max_length=32_000)
+
+
+class SheetSaveIn(BaseModel):
+    cells: list[SheetCellIn] = Field(default_factory=list)
+
+
 # -------------------------------------------------------------------- chat
 class SessionCreateIn(BaseModel):
     title: str | None = Field(default=None, max_length=200)

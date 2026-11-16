@@ -12,6 +12,8 @@
     --muted: 100 116 139;
     --accent: 79 70 229;
     --accent-soft: 238 242 255;
+    --selection-bg: 165 180 252;
+    --selection-text: 15 23 42;
   }
 
   .dark {
@@ -23,6 +25,8 @@
     --muted: 161 161 170;
     --accent: 129 140 248;
     --accent-soft: 49 46 129;
+    --selection-bg: 79 70 229;
+    --selection-text: 255 255 255;
   }
 
   html,
@@ -42,7 +46,16 @@
   }
 
   ::selection {
-    background-color: rgb(var(--accent) / 0.25);
+    background-color: rgb(var(--selection-bg));
+    color: rgb(var(--selection-text));
+  }
+
+  /* Keep the highlight readable inside dark code blocks and coloured bubbles. */
+  pre ::selection,
+  code ::selection,
+  .prose ::selection {
+    background-color: rgb(var(--selection-bg));
+    color: rgb(var(--selection-text));
   }
 
   ::-webkit-scrollbar {

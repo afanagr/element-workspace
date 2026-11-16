@@ -24,7 +24,8 @@ from app.services.parsing import (
     SUPPORTED_EXTENSIONS,
     detect_mime,
     extension_of,
-    is_supported,
+    is_text_bytes,
+    is_textual,
 )
 from app.services.storage import storage
 
@@ -75,7 +76,7 @@ def validate_upload(name: str, data: bytes) -> str:
     """Validate extension, size and magic bytes; returns the sanitised name."""
     safe = sanitize_name(name)
     ext = extension_of(safe)
-    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS and not is_text_bytes(data):
         raise NodeError(f"Unsupported file type: {ext or 'no extension'}", status_code=415)
     if len(data) > settings.max_upload_mb * 1024 * 1024:
         raise NodeError(f"File exceeds {settings.max_upload_mb} MB limit", status_code=413)
@@ -85,8 +86,24 @@ def validate_upload(name: str, data: bytes) -> str:
     return safe
 
 
-def mime_for(name: str) -> str:
-    return MIME_BY_EXTENSION.get(extension_of(name), detect_mime(name))
+def mime_for(name: str, data: bytes | None = None) -> str:
+    mime = MIME_BY_EXTENSION.get(extension_of(name)) or detect_mime(name)
+    if mime == "application/octet-stream" and data is not None and is_text_bytes(data):
+        # Unknown extension but the content is plain text: let viewers and the
+        # indexer treat it as a text document.
+        return "text/plain"
+    return mime
+
+
+def is_text_editable(node: Node) -> bool:
+    """True when the file can be safely edited as UTF-8 text in the viewer."""
+    if node.kind != "file" or not node.storage_key:
+        return False
+    ext = extension_of(node.name)
+    if ext in (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".xlsm", ".zip", ".pptx", ".ppt",
+               ".odt", ".ods", ".rtf", ".epub"):
+        return False
+    return node.mime == "text/plain" or is_textual(node.name)
 
 
 def _now() -> datetime:
@@ -261,7 +278,7 @@ async def write_file(
     node.storage_key = key
     node.size = size
     node.sha256 = sha
-    node.mime = mime_for(node.name)
+    node.mime = mime_for(node.name, data)
     node.index_status = "pending"
     node.index_error = None
     node.chunk_count = 0
@@ -301,7 +318,7 @@ async def create_file(
         raise NodeError("Cannot create a file inside a file")
     safe = sanitize_name(name)
     ext = extension_of(safe)
-    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS and not is_text_bytes(data):
         raise NodeError(f"Unsupported file type: {ext or 'no extension'}", status_code=415)
     if len(data) > settings.max_upload_mb * 1024 * 1024:
         raise NodeError(f"File exceeds {settings.max_upload_mb} MB limit", status_code=413)
@@ -322,7 +339,7 @@ async def create_file(
         parent_id=parent.id,
         project_id=project.id if project else None,
         owner_id=parent.owner_id,
-        mime=mime_for(safe),
+        mime=mime_for(safe, data),
         size=len(data),
         storage_key=None,
         created_by=created_by,
@@ -341,7 +358,10 @@ async def rename_node(db: AsyncSession, node: Node, new_name: str) -> Node:
     safe = await unique_name(db, node.parent_id, safe, exclude_id=node.id)
     node.name = safe
     if node.kind == "file":
-        node.mime = mime_for(safe)
+        updated_mime = mime_for(safe)
+        if updated_mime == "application/octet-stream" and node.mime == "text/plain":
+            updated_mime = "text/plain"
+        node.mime = updated_mime
     node.updated_at = utcnow()
     await db.flush()
     return node
@@ -540,7 +560,7 @@ def node_to_dict(node: Node) -> dict[str, Any]:
         "indexed_at": node.indexed_at.isoformat() if node.indexed_at else None,
         "created_at": node.created_at.isoformat() if node.created_at else None,
         "updated_at": node.updated_at.isoformat() if node.updated_at else None,
-        "view_kind": view_kind(node.name) if node.kind == "file" else "folder",
+        "view_kind": view_kind(node.name, node.mime) if node.kind == "file" else "folder",
         "extension": extension_of(node.name),
         "created_by": node.created_by,
     }
