@@ -103,7 +103,7 @@ def is_text_editable(node: Node) -> bool:
     if ext in (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".xlsm", ".zip", ".pptx", ".ppt",
                ".odt", ".ods", ".rtf", ".epub"):
         return False
-    return node.mime == "text/plain" or is_textual(node.name)
+    return (node.mime or "").startswith("text/") or is_textual(node.name)
 
 
 def _now() -> datetime:

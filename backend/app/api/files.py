@@ -20,6 +20,7 @@ from app.schemas import (
     CreateProjectIn,
     ExtractResult,
     NodeOut,
+    PdfPagesSaveIn,
     SheetSaveIn,
     TextPreviewOut,
     TextSaveIn,
@@ -30,7 +31,7 @@ from app.schemas import (
 )
 from app.services import nodes as node_service
 from app.services.archive import build_zip, extract_archive, zip_response
-from app.services.documents import apply_sheet_edits
+from app.services.documents import apply_sheet_edits, build_pdf_page_edit
 from app.services.indexer import enqueue_index
 from app.services.parsing import (
     OcrUnavailable,
@@ -38,7 +39,7 @@ from app.services.parsing import (
     parse_document,
     view_kind,
 )
-from app.services.storage import storage
+from app.services.storage import decode_bytes, storage
 from app.services.vectorstore import vector_store
 
 logger = get_logger(__name__)
@@ -234,6 +235,22 @@ async def node_text(
     )
 
 
+@router.get("/nodes/{node_id}/source")
+async def node_source_text(
+    node_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    """Raw decoded text of an editable text file (used by the CSV editor)."""
+    node = await node_service.get_node_for(db, node_id, user)
+    if not node_service.is_text_editable(node):
+        raise node_service.NodeError("This file type cannot be edited as text", status_code=415)
+    data = await storage.read_bytes(node.storage_key)
+    if len(data) > 5_000_000:
+        raise node_service.NodeError("This file is too large to edit", status_code=413)
+    return {"content": decode_bytes(data)}
+
+
 @router.put("/nodes/{node_id}/content", response_model=NodeOut)
 async def save_text_content(
     node_id: uuid.UUID,
@@ -289,6 +306,73 @@ async def save_sheet_cells(
         )
     await node_service.write_file(
         db, node, updated, created_by=user.username, note="edited in viewer"
+    )
+    await db.commit()
+    enqueue_index([node.id])
+    return node_service.node_to_dict(node)
+
+
+@router.put("/nodes/{node_id}/pages", response_model=NodeOut)
+async def save_pdf_pages(
+    node_id: uuid.UUID,
+    payload: PdfPagesSaveIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    """Re-order / rotate / delete / merge PDF pages and save a new version."""
+    node = await node_service.get_node_for(db, node_id, user)
+    if node.kind != "file" or not node.storage_key:
+        raise node_service.NodeError("This node has no editable content", status_code=404)
+    if node_service.extension_of(node.name) != ".pdf":
+        raise node_service.NodeError("Page editing supports .pdf files only", status_code=415)
+    if not payload.pages:
+        raise node_service.NodeError("The result must contain at least one page", status_code=400)
+    if len(payload.pages) > 2000:
+        raise node_service.NodeError("Too many pages in one request", status_code=413)
+
+    target_id = str(node.id)
+    target_data = await storage.read_bytes(node.storage_key)
+    sources: dict[str, bytes] = {}
+    for ref in payload.pages:
+        if ref.node_id is None or str(ref.node_id) == target_id:
+            continue
+        key = str(ref.node_id)
+        if key in sources:
+            continue
+        source = await node_service.get_node_for(db, ref.node_id, user)
+        if source.kind != "file" or not source.storage_key:
+            raise node_service.NodeError("Source PDF has no content", status_code=400)
+        if node_service.extension_of(source.name) != ".pdf":
+            raise node_service.NodeError("Only PDF files can be merged", status_code=400)
+        if str(source.project_id) != str(node.project_id):
+            raise node_service.NodeError(
+                "Cannot merge a PDF from another project", status_code=403
+            )
+        sources[key] = await storage.read_bytes(source.storage_key)
+
+    refs = [
+        {
+            "node_id": None
+            if ref.node_id is None or str(ref.node_id) == target_id
+            else str(ref.node_id),
+            "page": ref.page,
+            "rotate": ref.rotate,
+        }
+        for ref in payload.pages
+    ]
+    try:
+        updated = await anyio.to_thread.run_sync(
+            build_pdf_page_edit, target_data, sources, refs
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Saving PDF pages failed")
+        raise node_service.NodeError(f"Cannot save pages: {exc}", status_code=422) from exc
+    if len(updated) > settings.max_upload_mb * 1024 * 1024:
+        raise node_service.NodeError(
+            f"File exceeds {settings.max_upload_mb} MB limit", status_code=413
+        )
+    await node_service.write_file(
+        db, node, updated, created_by=user.username, note="pages edited in viewer"
     )
     await db.commit()
     enqueue_index([node.id])

@@ -119,7 +119,7 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
       return <DocxViewer key={`${node.id}-${node.updated_at}`} node={node} />;
     }
     if (node.extension === '.pdf') {
-      return <PdfViewer key={`${node.id}-${node.updated_at}`} node={node} />;
+      return <PdfViewer key={`${node.id}-${node.updated_at}`} node={node} onSaved={onRefresh} />;
     }
     if (IMAGE_EXTENSIONS.has(node.extension)) {
       return <ImageViewer node={node} onOpenNode={() => undefined} />;

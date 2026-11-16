@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ORMModel(BaseModel):
@@ -96,6 +96,23 @@ class SheetCellIn(BaseModel):
 
 class SheetSaveIn(BaseModel):
     cells: list[SheetCellIn] = Field(default_factory=list)
+
+
+class PdfPageRefIn(BaseModel):
+    node_id: uuid.UUID | None = None
+    page: int = Field(ge=1)
+    rotate: int = Field(default=0, ge=0, le=270)
+
+    @field_validator('rotate')
+    @classmethod
+    def _rotation_multiple_of_90(cls, value: int) -> int:
+        if value % 90:
+            raise ValueError('rotation must be a multiple of 90 degrees')
+        return value
+
+
+class PdfPagesSaveIn(BaseModel):
+    pages: list[PdfPageRefIn] = Field(default_factory=list)
 
 
 # -------------------------------------------------------------------- chat

@@ -149,6 +149,8 @@ export const api = {
 
   tree: (ownerId?: string | null) =>
     request<WorkNode[]>(`/api/tree${ownerId ? `?owner_id=${encodeURIComponent(ownerId)}` : ''}`),
+  projectTree: (projectId: string) =>
+    request<WorkNode[]>(`/api/tree?project_id=${encodeURIComponent(projectId)}`),
   createProject: (name: string) =>
     request<WorkNode>('/api/projects', { method: 'POST', body: JSON.stringify({ name }) }),
   createFolder: (parentId: string, name: string) =>
@@ -198,10 +200,20 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ content }),
     }),
+  sourceText: (nodeId: string) =>
+    request<{ content: string }>(`/api/nodes/${nodeId}/source`),
   saveSheetCells: (nodeId: string, cells: { sheet: string; cell: string; value: string | null }[]) =>
     request<WorkNode>(`/api/nodes/${nodeId}/sheet`, {
       method: 'PUT',
       body: JSON.stringify({ cells }),
+    }),
+  savePdfPages: (
+    nodeId: string,
+    pages: { node_id?: string | null; page: number; rotate: number }[],
+  ) =>
+    request<WorkNode>(`/api/nodes/${nodeId}/pages`, {
+      method: 'PUT',
+      body: JSON.stringify({ pages }),
     }),
   versions: (nodeId: string) => request<VersionInfo[]>(`/api/nodes/${nodeId}/versions`),
   revertVersion: (nodeId: string, versionId: string) =>

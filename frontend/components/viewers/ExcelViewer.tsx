@@ -31,6 +31,11 @@ export function ExcelViewer({ node, onSaved }: { node: WorkNode; onSaved?: () =>
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [changeCount, setChangeCount] = useState(0);
+  const [textMode, setTextMode] = useState(false);
+  const [textDraft, setTextDraft] = useState('');
+  const [textOriginal, setTextOriginal] = useState('');
+  const [textLoading, setTextLoading] = useState(false);
+  const [textSaving, setTextSaving] = useState(false);
   const changesRef = useRef<Map<string, CellChange>>(new Map());
 
   useEffect(() => {
@@ -43,6 +48,9 @@ export function ExcelViewer({ node, onSaved }: { node: WorkNode; onSaved?: () =>
     setEditing(false);
     changesRef.current.clear();
     setChangeCount(0);
+    setTextMode(false);
+    setTextDraft('');
+    setTextOriginal('');
     void (async () => {
       try {
         const response = await fetch(api.contentUrl(node.id));
@@ -79,6 +87,48 @@ export function ExcelViewer({ node, onSaved }: { node: WorkNode; onSaved?: () =>
     [editing, draft, sheets, active],
   );
   const editable = node.extension === '.xlsx' || node.extension === '.xlsm';
+  const csv = node.extension === '.csv';
+
+  const startTextEdit = async () => {
+    if (textLoading) return;
+    setTextLoading(true);
+    setError(null);
+    try {
+      const source = await api.sourceText(node.id);
+      setTextDraft(source.content);
+      setTextOriginal(source.content);
+      setTextMode(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTextLoading(false);
+    }
+  };
+
+  const cancelTextEdit = () => {
+    if (textDraft !== textOriginal && !window.confirm(t('excel.discardConfirm'))) return;
+    setTextMode(false);
+    setTextDraft('');
+    setTextOriginal('');
+    setError(null);
+  };
+
+  const saveText = async () => {
+    if (textSaving) return;
+    setTextSaving(true);
+    setError(null);
+    try {
+      await api.saveText(node.id, textDraft);
+      setTextMode(false);
+      setTextDraft('');
+      setTextOriginal('');
+      onSaved?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTextSaving(false);
+    }
+  };
 
   const setCell = (rowIndex: number, cellIndex: number, value: string) => {
     setDraft((prev) => {
@@ -132,7 +182,7 @@ export function ExcelViewer({ node, onSaved }: { node: WorkNode; onSaved?: () =>
   };
 
   if (loading) return <div className="p-4 text-xs text-slate-500">{t('excel.loading')}</div>;
-  if (error && !editing)
+  if (error && !editing && !textMode)
     return (
       <div className="p-4 text-xs text-rose-600">{t('excel.failed', { error })}</div>
     );
@@ -140,25 +190,43 @@ export function ExcelViewer({ node, onSaved }: { node: WorkNode; onSaved?: () =>
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-1 border-b px-2 py-1.5">
-        {Object.keys(sheets).map((name) => (
-          <button
-            key={name}
-            type="button"
-            onClick={() => setActive(name)}
-            className={`rounded px-2 py-1 text-xs ${
-              name === active
-                ? 'bg-indigo-600 text-white'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-zinc-800 dark:text-zinc-300'
-            }`}
-          >
-            {name}
-          </button>
-        ))}
+        {textMode ? (
+          <span className="text-xs font-medium">{t('excel.textMode')}</span>
+        ) : (
+          Object.keys(sheets).map((name) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => setActive(name)}
+              className={`rounded px-2 py-1 text-xs ${
+                name === active
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-zinc-800 dark:text-zinc-300'
+              }`}
+            >
+              {name}
+            </button>
+          ))
+        )}
         <span className="ml-auto self-center text-[10px] text-slate-500">
-          {t('excel.rows', { count: rows.length })}
+          {textMode ? t('excel.textHint') : t('excel.rows', { count: rows.length })}
           {editing && changeCount ? ` · ${t('excel.changes', { count: changeCount })}` : ''}
         </span>
-        {editing ? (
+        {textMode ? (
+          <>
+            <button type="button" className="btn" onClick={cancelTextEdit} disabled={textSaving}>
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void saveText()}
+              disabled={textSaving || textDraft === textOriginal}
+            >
+              {textSaving ? t('common.working') : t('common.save')}
+            </button>
+          </>
+        ) : editing ? (
           <>
             <button type="button" className="btn" onClick={cancelEdit} disabled={saving}>
               {t('common.cancel')}
@@ -176,9 +244,27 @@ export function ExcelViewer({ node, onSaved }: { node: WorkNode; onSaved?: () =>
           <button type="button" className="btn" onClick={startEdit} title={t('excel.editHint')}>
             ✎ {t('excel.edit')}
           </button>
+        ) : csv ? (
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void startTextEdit()}
+            disabled={textLoading}
+            title={t('excel.textHint')}
+          >
+            ✎ {textLoading ? t('common.loading') : t('excel.editText')}
+          </button>
         ) : null}
       </div>
       {error ? <div className="px-2 pt-1 text-[11px] text-rose-600">{error}</div> : null}
+      {textMode ? (
+        <textarea
+          className="min-h-0 flex-1 resize-none bg-transparent p-2 font-mono text-xs outline-none"
+          value={textDraft}
+          spellCheck={false}
+          onChange={(event) => setTextDraft(event.target.value)}
+        />
+      ) : (
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-xs">
           <tbody>
@@ -213,6 +299,7 @@ export function ExcelViewer({ node, onSaved }: { node: WorkNode; onSaved?: () =>
           <div className="p-4 text-xs text-slate-500">{t('excel.empty')}</div>
         ) : null}
       </div>
+      )}
     </div>
   );
 }

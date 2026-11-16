@@ -214,6 +214,66 @@ def build_pdf_parts(
     return output
 
 
+def build_pdf_page_edit(
+    target: bytes,
+    sources: dict[str, bytes],
+    pages: Sequence[dict[str, Any]],
+) -> bytes:
+    """Rebuild a PDF from an explicit page list (reorder / rotate / delete / merge).
+
+    Each item is ``{"node_id": None|"<other pdf id>", "page": 1-based, "rotate": 0|90|180|270}``.
+    ``node_id=None`` references the target document; other ids must be supplied in
+    ``sources``. Pages are copied as objects, so images and layout survive.
+    """
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import NameObject, NumberObject
+
+    readers: dict[str, PdfReader] = {"": PdfReader(io.BytesIO(target))}
+    try:
+        for node_id, data in sources.items():
+            readers[str(node_id)] = PdfReader(io.BytesIO(data))
+        writer = PdfWriter()
+        for item in pages:
+            source = str(item.get("node_id") or "")
+            reader = readers.get(source)
+            if reader is None:
+                raise ValueError(f"Unknown source PDF: {source or 'target'}")
+            try:
+                index = int(item.get("page") or 0) - 1
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Invalid page number") from exc
+            if index < 0 or index >= len(reader.pages):
+                raise ValueError(f"Page {index + 1} is outside 1..{len(reader.pages)}")
+            page = reader.pages[index]
+            angle = int(item.get("rotate") or 0) % 360
+            if angle and angle % 90:
+                raise ValueError("Rotation must be a multiple of 90 degrees")
+            writer.add_page(page)
+            if angle:
+                # Rotate the copy inside the writer: mutating the source page would
+                # leak the rotation into later references to the same source page.
+                written = writer.pages[-1]
+                current = int(written.get("/Rotate", 0) or 0)
+                written[NameObject("/Rotate")] = NumberObject((current + angle) % 360)
+        if len(writer.pages) == 0:
+            raise ValueError("The result would have no pages")
+        metadata = readers[""].metadata
+        if metadata:
+            try:
+                writer.add_metadata({str(key): str(value) for key, value in metadata.items()})
+            except Exception:  # noqa: BLE001 - metadata is best effort
+                logger.debug("Could not copy PDF metadata", exc_info=True)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        return buffer.getvalue()
+    finally:
+        for reader in readers.values():
+            try:
+                reader.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def apply_sheet_edits(data: bytes, cells: Sequence[dict[str, Any]]) -> bytes:
     """Write cell values into an .xlsx workbook and return the new bytes.
 

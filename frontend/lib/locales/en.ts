@@ -148,6 +148,9 @@ export const en: Record<string, string> = {
   'excel.editHint': 'Edit cell values directly; saving creates a new version.',
   'excel.changes': '{count} changed cell(s)',
   'excel.discardConfirm': 'Discard unsaved cell changes?',
+  'excel.editText': 'Edit as text',
+  'excel.textMode': 'CSV source',
+  'excel.textHint': 'Edit the CSV source as plain text; saving creates a new version.',
 
   // ------------------------------------------------------------------ docx
   'docx.loading': 'Converting document…',
@@ -160,6 +163,20 @@ export const en: Record<string, string> = {
   'pdf.failed': 'Failed to render PDF: {error}',
   'pdf.page': 'Page {page} / {total}',
   'pdf.renderedBy': 'rendered with PDF.js',
+  'pdf.edit': 'Edit pages',
+  'pdf.editHint': 'Reorder, rotate, delete or merge pages; saving creates a new version.',
+  'pdf.pageLabel': 'source page {page}',
+  'pdf.moveUp': 'Move up',
+  'pdf.moveDown': 'Move down',
+  'pdf.rotate': 'Rotate 90°',
+  'pdf.removePage': 'Remove page',
+  'pdf.addPdf': 'Add PDF',
+  'pdf.addTitle': 'Add pages from another PDF',
+  'pdf.addHint': 'Pick a PDF from this project — all of its pages are appended.',
+  'pdf.add': 'Add',
+  'pdf.noOtherPdfs': 'No other PDFs in this project.',
+  'pdf.noPages': 'The document must keep at least one page.',
+  'pdf.discardConfirm': 'Discard unsaved page changes?',
 
   // ----------------------------------------------------------------- image
   'image.ocr': '🔍 Extract text (OCR)',
