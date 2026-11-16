@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -60,9 +60,22 @@ async def list_providers(
 
 @router.post("/providers/test", response_model=ProviderTestOut)
 async def test_provider(
-    db: AsyncSession = Depends(get_db), user: User = CurrentUser
+    provider: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
 ) -> ProviderTestOut:
-    """Test the first connected model (kept for backwards compatibility)."""
+    """Test a model connection.
+
+    The provider name may contain ``/`` (for example ``qwen3.6-35b-a3b/latest``),
+    which cannot be placed in a path segment, so the UI passes it as a query
+    parameter. Without ``provider`` the first connection is tested, as before.
+    """
+    if provider:
+        view = await registry.provider_view(db, user, provider)
+        if view is None:
+            raise HTTPException(status_code=404, detail=f"Model connection not found: {provider}")
+        health = await registry.test(db, user, provider)
+        return _test_payload(view.name, health, view.models)
     views = await registry.list_providers(db, user)
     if not views:
         return ProviderTestOut(provider="", ok=False, message=_degraded_banner(False) or "")
@@ -82,23 +95,21 @@ async def test_named_provider(
     return _test_payload(view.name, health, view.models)
 
 
-@router.get("/providers/{provider}/models")
-async def named_provider_models(
-    provider: str, db: AsyncSession = Depends(get_db), user: User = CurrentUser
+async def _models_payload(
+    db: AsyncSession, user: User, name: str
 ) -> dict[str, Any]:
-    """The connected model merged with the live model list when available."""
-    view = await registry.provider_view(db, user, provider)
+    view = await registry.provider_view(db, user, name)
     if view is None:
-        raise HTTPException(status_code=404, detail=f"Model connection not found: {provider}")
+        raise HTTPException(status_code=404, detail=f"Model connection not found: {name}")
     base = {"provider": view.name, "configured": True}
-    client = await registry.get_provider(db, user, provider)
+    client = await registry.get_provider(db, user, name)
     if client is None:
         return {**base, "models": list(view.models), "dynamic": False}
     try:
         live = await asyncio.wait_for(client.list_models(), timeout=15)
     except (ProviderError, asyncio.TimeoutError) as exc:
         message = getattr(exc, "message", "model listing timed out")
-        logger.info("Model listing for %s failed: %s", provider, message)
+        logger.info("Model listing for %s failed: %s", name, message)
         return {
             **base,
             "models": list(view.models),
@@ -107,6 +118,24 @@ async def named_provider_models(
         }
     merged = list(dict.fromkeys([*live, *view.models]))
     return {**base, "models": merged, "dynamic": True}
+
+
+@router.get("/providers/models")
+async def provider_models_query(
+    provider: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict[str, Any]:
+    """Live model list by query parameter (names may contain slashes)."""
+    return await _models_payload(db, user, provider)
+
+
+@router.get("/providers/{provider}/models")
+async def named_provider_models(
+    provider: str, db: AsyncSession = Depends(get_db), user: User = CurrentUser
+) -> dict[str, Any]:
+    """The connected model merged with the live model list when available."""
+    return await _models_payload(db, user, provider)
 
 
 @router.post("/embeddings/test")

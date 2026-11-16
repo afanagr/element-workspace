@@ -262,12 +262,12 @@ export const api = {
   settings: () => request<SettingsResponse>('/api/settings'),
   testProvider: (provider: string) =>
     request<{ provider: string; ok: boolean; message: string; latency_ms: number; models: string[] }>(
-      `/api/providers/${provider}/test`,
+      `/api/providers/test?provider=${encodeURIComponent(provider)}`,
       { method: 'POST' },
     ),
   providerModels: (provider: string) =>
     request<{ models: string[]; dynamic: boolean; error?: string }>(
-      `/api/providers/${provider}/models`,
+      `/api/providers/models?provider=${encodeURIComponent(provider)}`,
     ),
   testEmbeddings: (provider?: string, model?: string) => {
     const params = new URLSearchParams();
