@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     ocr_max_pages: int = 200
     ocr_min_page_chars: int = 20
     ocr_timeout_seconds: int = 120
+    # Total OCR budget per document: keeps one huge scan from blocking a request
+    # (or a Celery worker) for longer than the proxy timeout.
+    ocr_budget_seconds: int = 540
     ocr_deskew: bool = True
     ocr_min_orientation_confidence: float = 1.0
 

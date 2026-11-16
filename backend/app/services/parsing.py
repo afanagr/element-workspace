@@ -13,6 +13,7 @@ import io
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -351,6 +352,8 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
     segments: list[Segment] = []
     pages = 0
     ocr_pages = 0
+    ocr_skipped = 0
+    ocr_started = time.monotonic()
     recognizer: PdfPageOcr | None = None
     try:
         with pdfplumber.open(io.BytesIO(data)) as pdf:
@@ -361,35 +364,48 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
                 if (
                     ocr
                     and settings.ocr_pdf_enabled
-                    and ocr_pages < settings.ocr_max_pages
                     and _meaningful_chars(page_text) < settings.ocr_min_page_chars
                 ):
-                    try:
-                        if recognizer is None:
-                            recognizer = PdfPageOcr(data)
-                        ocr_text, info = recognizer.recognize(index - 1)
-                    except OcrUnavailable:
-                        raise
-                    except Exception as exc:  # noqa: BLE001 - one bad page must not kill the document
-                        logger.warning("OCR failed for page %s of the PDF: %s", index, exc)
+                    out_of_pages = ocr_pages >= settings.ocr_max_pages
+                    out_of_time = (
+                        time.monotonic() - ocr_started
+                    ) >= settings.ocr_budget_seconds
+                    if out_of_pages or out_of_time:
+                        ocr_skipped += 1
                     else:
-                        if ocr_text:
-                            used_ocr = True
-                            ocr_pages += 1
-                            page_text = f"{page_text}\n{ocr_text}".strip() if page_text.strip() else ocr_text
-                            logger.info(
-                                "OCR page %s/%s: %s chars in %ss",
-                                index,
-                                pages,
-                                len(ocr_text),
-                                info.get("seconds"),
-                            )
+                        try:
+                            if recognizer is None:
+                                recognizer = PdfPageOcr(data)
+                            ocr_text, info = recognizer.recognize(index - 1)
+                        except OcrUnavailable:
+                            raise
+                        except Exception as exc:  # noqa: BLE001 - one bad page must not kill the document
+                            logger.warning("OCR failed for page %s of the PDF: %s", index, exc)
+                        else:
+                            if ocr_text:
+                                used_ocr = True
+                                ocr_pages += 1
+                                page_text = f"{page_text}\n{ocr_text}".strip() if page_text.strip() else ocr_text
+                                logger.info(
+                                    "OCR page %s/%s: %s chars in %ss",
+                                    index,
+                                    pages,
+                                    len(ocr_text),
+                                    info.get("seconds"),
+                                )
                 if page_text.strip():
                     label = f"page:{index}" + (" (ocr)" if used_ocr else "")
                     segments.append(Segment(label, page_text))
     finally:
         if recognizer is not None:
             recognizer.close()
+
+    if ocr_skipped:
+        logger.info(
+            "OCR stopped after %s page(s): %s page(s) left for a later run",
+            ocr_pages,
+            ocr_skipped,
+        )
 
     text = "\n\n".join(segment.text for segment in segments)
     document = ParsedDocument(
@@ -402,6 +418,7 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
             "needs_ocr": not segments,
             "ocr": ocr_pages > 0,
             "ocr_pages": ocr_pages,
+            "ocr_skipped_pages": ocr_skipped,
             "ocr_engine": "tesseract" if ocr_pages else None,
             "ocr_lang": ocr_languages() if ocr_pages else None,
         },
