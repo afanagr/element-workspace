@@ -47,7 +47,9 @@ Rules:
   and layout stay). create_pdf only builds a NEW text PDF and cannot carry images over.
 - Delete/rename/move are allowed; the user can undo every action, so mention what you changed.
 - When retrieved context is provided, cite it inline as [1], [2] - exactly matching the fragment numbers.
-- Never claim a file was created, changed or deleted unless a tool call succeeded.
+- Never claim a file was created, changed or deleted unless a tool call succeeded. This includes
+  format changes: if the user asks for another format (e.g. "в ворде" after a PDF), call write_file
+  with the new .docx name and full content, or convert_to_pdf for Office->PDF, and wait for the result.
 - Answer in the user's language, be concise, and show the important result (not raw dumps).
 """
 
@@ -73,9 +75,10 @@ MUTATING_TOOLS = frozenset(
 _ACTION_RE = re.compile(
     r"\b(добавь|добавьте|запиши|запишите|измени|измените|создай|создайте|удали|"
     r"удалите|переименуй|переименуйте|перемести|переместите|обнови|обновите|вставь|"
-    r"вставьте|заполни|заполните|дополни|дополните|переведи|переведите|add|append|"
+    r"вставьте|заполни|заполните|дополни|дополните|переведи|переведите|пересоздай|"
+    r"переделай|сделай|сформируй|add|append|"
     r"write|create|update|delete|remove|rename|move|insert|fill|edit|translate|put|"
-    r"конверт|преобразуй|convert)\b",
+    r"convert|generate)\b",
     re.IGNORECASE,
 )
 _QUESTION_RE = re.compile(
@@ -84,11 +87,35 @@ _QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 _FILE_HINT_RE = re.compile(
-    r"(файл|документ|excel|xlsx|xls|word|docx|pdf|таблиц|лист|папк|проект|"
+    r"(файл|документ|excel|xlsx|xls|word|docx|ворд|ворде|ворду|вордов|эксель|экселе|"
+    r"презентац|pptx|пдф|pdf|таблиц|лист|папк|проект|"
     r"file|document|sheet|folder|project|spreadsheet|txt|csv|json|markdown|log|"
-    r"\.(txt|csv|md|json|ya?ml|log|py|js|ts|tsx|html|htm))",
+    r"\.(txt|csv|md|json|ya?ml|log|py|js|ts|tsx|html|htm|docx|xlsx|pptx|pdf))",
     re.IGNORECASE,
 )
+_CLAIM_RE = re.compile(
+    r"\b(создал|создала|создано|создан|создана|созданы|пересоздал|пересоздан|"
+    r"обновил|обновлён|обновлен|обновлена|сохранил|сохранён|сохранен|записал|записан|"
+    r"сформировал|сформирован|created|saved|updated|written|generated)\b",
+    re.IGNORECASE,
+)
+_CLAIM_FILE_RE = re.compile(
+    r"(файл|документ|pdf|docx|xlsx|pptx|word|ворд|эксель|презентац|"
+    r"file|document|spreadsheet|presentation)",
+    re.IGNORECASE,
+)
+_NEGATION_RE = re.compile(
+    r"(не\s+(создан|удалось|получилось|готов)|ошибк|failed|could not|not created|"
+    r"не примен)",
+    re.IGNORECASE,
+)
+
+
+def _claims_file_action(text: str) -> bool:
+    """Detect a success claim about a file without any tool call behind it."""
+    if not text or _NEGATION_RE.search(text):
+        return False
+    return bool(_CLAIM_RE.search(text) and _CLAIM_FILE_RE.search(text))
 _PDF_SPLIT_RE = re.compile(
     r"(pdf.*(разб|раздел|разбить|по страниц|извлек|выдел|split|extract)"
     r"|(разб|раздел|разбить|по страниц|извлек|выдел|split|extract).*pdf)",
@@ -99,9 +126,10 @@ MAX_TOOL_CORRECTIONS = 2
 NO_MUTATION_REMINDER = (
     "You have NOT changed anything yet: no project-changing tool was called, so the "
     "file is untouched. Do NOT claim success. Do NOT call list/read tools again - the "
-    "file contents are already in the tool results above. Call excel_write (for "
-    "spreadsheets) or write_file (for text) RIGHT NOW with the final data, then wait "
-    "for the tool result before answering."
+    "file contents are already in the tool results above. Call write_file RIGHT NOW with "
+    "the final data and the requested format (for example a new .docx name when the user "
+    "asks 'в ворде'); use excel_write for spreadsheets and convert_to_pdf to turn an "
+    "existing Office file into PDF. Then wait for the tool result before answering."
 )
 NOT_APPLIED_NOTE = (
     "\n\n⚠️ Изменения не применены: модель не вызвала ни одного инструмента записи."
@@ -472,7 +500,9 @@ async def run_agent(
                     )
                     continue
                 answer_text = f"{answer_text.rstrip()}{PDF_NOT_SPLIT_NOTE}"
-            elif edit_requested and mutations_done == 0:
+            elif (
+                edit_requested or _claims_file_action(answer_text)
+            ) and mutations_done == 0:
                 if corrections < MAX_TOOL_CORRECTIONS:
                     corrections += 1
                     logger.info(
@@ -488,7 +518,11 @@ async def run_agent(
                         )
                     )
                     continue
-                answer_text = f"{answer_text.rstrip()}{NOT_APPLIED_NOTE}"
+                answer_text = (
+                    f"{NOT_APPLIED_NOTE.strip()}\n\n{answer_text}"
+                    if answer_text.strip()
+                    else NOT_APPLIED_NOTE.strip()
+                )
             record = await chat_service.add_message(
                 db,
                 session.id,
