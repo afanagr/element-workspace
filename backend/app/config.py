@@ -96,6 +96,22 @@ class Settings(BaseSettings):
     ocr_deskew: bool = True
     ocr_min_orientation_confidence: float = 1.0
 
+    # ------------------------------------------------------- ocr quality
+    # LSTM engine only (oem 1) is the most accurate for modern models.
+    ocr_oem: int = 1
+    # Page segmentation modes tried per page; the result with the highest mean
+    # word confidence wins (3 = auto, 6 = single uniform block, 4 = single column).
+    ocr_psm: str = "3,6"
+    ocr_binarize: bool = True
+    ocr_denoise: bool = True
+    ocr_border_px: int = 24
+    # Fine skew search range in degrees (0 disables the projection-profile pass).
+    ocr_deskew_angle: float = 6.0
+    # Below this mean confidence the page is retried with English-only models.
+    ocr_min_confidence: float = 55.0
+    # Bump to invalidate cached OCR results after tuning the settings above.
+    ocr_cache_version: int = 2
+
     # --------------------------------------------------------- onlyoffice
     # Office documents are edited (and converted to PDF) by the OnlyOffice
     # Document Server. Set ONLYOFFICE_ENABLED=false (or clear the URL/secret) to
@@ -129,6 +145,16 @@ class Settings(BaseSettings):
     @property
     def onlyoffice_hosts(self) -> set[str]:
         return {host.strip().lower() for host in self.onlyoffice_allowed_hosts.split(",") if host.strip()}
+
+    @property
+    def ocr_psm_list(self) -> list[int]:
+        """Page segmentation modes to try, in order (invalid values are ignored)."""
+        modes: list[int] = []
+        for part in (self.ocr_psm or "").split(","):
+            value = part.strip()
+            if value.isdigit() and 0 <= int(value) <= 13:
+                modes.append(int(value))
+        return modes or [3, 6]
 
     @property
     def cors_origin_list(self) -> list[str]:

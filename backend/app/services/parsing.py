@@ -22,9 +22,10 @@ from app.logging_config import get_logger
 from app.services.ocr import (
     OcrUnavailable,
     PdfPageOcr,
-    ensure_tesseract,
+    cache_key,
     languages as ocr_languages,
     load_cached,
+    recognize_image,
     store_cached,
 )
 from app.services.storage import decode_bytes
@@ -332,13 +333,28 @@ def _meaningful_chars(text: str) -> int:
     return sum(1 for char in text if char.isalnum())
 
 
+def _text_layer_usable(text: str) -> bool:
+    """Trust the embedded text layer only when it carries real characters.
+
+    Scanned PDFs often embed an empty or mojibake layer ("???", U+FFFD) that must
+    not prevent recognition, and a garbage layer is replaced by the OCR text.
+    """
+    if not text:
+        return False
+    if _meaningful_chars(text) < settings.ocr_min_page_chars:
+        return False
+    broken = text.count("\ufffd") + text.count("?")
+    return broken / max(1, len(text)) < 0.1
+
+
 def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
     import pdfplumber
 
     # A cached OCR result is reused by every caller (indexing, previews, agent
     # tools), so a scan does not need to be recognised twice.
     sha256 = hashlib.sha256(data).hexdigest()
-    cached = load_cached(sha256)
+    key = cache_key(sha256)
+    cached = load_cached(key) if key else None
     if cached is not None:
         return _cached_pdf_document(cached)
 
@@ -346,6 +362,8 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
     pages = 0
     ocr_pages = 0
     ocr_skipped = 0
+    confidences: list[float] = []
+    psms: set[int] = set()
     ocr_started = time.monotonic()
     recognizer: PdfPageOcr | None = None
     try:
@@ -353,11 +371,9 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
             pages = len(pdf.pages)
             for index, page in enumerate(pdf.pages, start=1):
                 page_text = page.extract_text() or ""
+                layer_usable = _text_layer_usable(page_text)
                 used_ocr = False
-                if (
-                    ocr
-                    and _meaningful_chars(page_text) < settings.ocr_min_page_chars
-                ):
+                if ocr and not layer_usable:
                     out_of_pages = ocr_pages >= settings.ocr_max_pages
                     out_of_time = (
                         time.monotonic() - ocr_started
@@ -377,12 +393,24 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
                             if ocr_text:
                                 used_ocr = True
                                 ocr_pages += 1
-                                page_text = f"{page_text}\n{ocr_text}".strip() if page_text.strip() else ocr_text
+                                confidence = info.get("confidence")
+                                if isinstance(confidence, (int, float)):
+                                    confidences.append(float(confidence))
+                                psm = info.get("psm")
+                                if isinstance(psm, int):
+                                    psms.add(psm)
+                                # A garbage text layer must not shadow the OCR text.
+                                if not layer_usable or _meaningful_chars(ocr_text) >= _meaningful_chars(page_text):
+                                    page_text = ocr_text
+                                else:
+                                    page_text = f"{page_text}\n{ocr_text}".strip()
                                 logger.info(
-                                    "OCR page %s/%s: %s chars in %ss",
+                                    "OCR page %s/%s: %s chars, psm %s, confidence %s, %ss",
                                     index,
                                     pages,
                                     len(ocr_text),
+                                    info.get("psm"),
+                                    info.get("confidence"),
                                     info.get("seconds"),
                                 )
                 if page_text.strip():
@@ -413,10 +441,12 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
             "ocr_skipped_pages": ocr_skipped,
             "ocr_engine": "tesseract" if ocr_pages else None,
             "ocr_lang": ocr_languages() if ocr_pages else None,
+            "ocr_confidence": round(sum(confidences) / len(confidences), 1) if confidences else None,
+            "ocr_psm": sorted(psms) if psms else None,
         },
     )
-    if sha256 and ocr_pages:
-        store_cached(sha256, _pdf_cache_payload(document))
+    if key and ocr_pages:
+        store_cached(key, _pdf_cache_payload(document))
     return document
 
 
@@ -424,23 +454,26 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
 def _parse_image(data: bytes) -> ParsedDocument:
     from PIL import Image
 
-    pytesseract = ensure_tesseract()
-
     with Image.open(io.BytesIO(data)) as image:
         image.load()
         width, height = image.size
         mode = image.mode
-        try:
-            text = pytesseract.image_to_string(image, lang=ocr_languages())
-        except pytesseract.TesseractError:
-            logger.warning("OCR with lang=%s failed, retrying with eng", ocr_languages())
-            text = pytesseract.image_to_string(image, lang="eng")
+        text, info = recognize_image(image)
     text = text.strip()
     return ParsedDocument(
         "image",
         text,
         [Segment("ocr", text)] if text else [],
-        {"width": width, "height": height, "mode": mode, "ocr": True},
+        {
+            "width": width,
+            "height": height,
+            "mode": mode,
+            "ocr": True,
+            "ocr_confidence": info.get("confidence"),
+            "ocr_psm": info.get("psm"),
+            "ocr_lang": info.get("language"),
+            "ocr_rotation": info.get("rotation"),
+        },
     )
 
 

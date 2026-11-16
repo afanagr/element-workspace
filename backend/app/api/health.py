@@ -41,6 +41,18 @@ async def _check_redis() -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
+async def _check_ocr() -> tuple[bool, str]:
+    """Tesseract and its language data power image and scanned-PDF OCR."""
+    import anyio
+
+    from app.services.ocr import available_languages
+
+    langs = await anyio.to_thread.run_sync(available_languages)
+    if not langs:
+        return False, "tesseract or its language data is not installed"
+    return True, "languages: " + ", ".join(langs)
+
+
 async def _check_documentserver() -> tuple[bool, str]:
     """OnlyOffice is optional: a configured but unreachable server is reported."""
     if not settings.office_configured:
@@ -65,6 +77,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
     qdrant_ok, qdrant_message = await vector_store.health()
     redis_ok, redis_message = await _check_redis()
     office_ok, office_message = await _check_documentserver()
+    ocr_ok, ocr_message = await _check_ocr()
 
     embedding_configured = ["local"] if local_embeddings_available() else []
     warnings: list[str] = []
@@ -89,6 +102,8 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         warnings.append(f"Redis unavailable: {redis_message} (Celery jobs will run inline)")
     if not office_ok:
         warnings.append(f"OnlyOffice Document Server unavailable: {office_message}")
+    if not ocr_ok:
+        warnings.append(f"OCR is unavailable: {ocr_message}")
 
     status = "ok"
     if not db_ok:
@@ -104,6 +119,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
             "qdrant": {"ok": qdrant_ok, "message": qdrant_message},
             "redis": {"ok": redis_ok, "message": redis_message},
             "documentserver": {"ok": office_ok, "message": office_message},
+            "ocr": {"ok": ocr_ok, "message": ocr_message},
         },
         "providers": {
             # Chat endpoints are per account (model_connections); the public

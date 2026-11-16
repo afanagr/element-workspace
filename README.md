@@ -527,10 +527,37 @@ AI-created XLSX with a second sheet, ZIP download/extract and operation undo.
 
 ---
 
+## OCR quality
+
+Scanned PDFs and images share one pipeline (`backend/app/services/ocr.py`):
+
+1. **Preprocessing** — grayscale, upscale of pages narrower than 1600 px, median denoise,
+   Otsu binarisation and a 24 px white border (Tesseract needs margins around the text).
+2. **Orientation** — OSD rotates 90/180/270, then a projection-profile pass corrects the
+   1–5° skew that OSD cannot see.
+3. **Multi-PSM** — every mode in `OCR_PSM` (default `3,6`) is tried and the result with the
+   highest mean **word confidence** wins. The numbers are stored in the parse `meta`
+   (`ocr_confidence`, `ocr_psm`) and written to the logs per page.
+4. **Language fallback** — below `OCR_MIN_CONFIDENCE` (55) the page is retried with `eng`.
+5. **Text-layer gate** — a page is recognised when its embedded layer has fewer than
+   `OCR_MIN_PAGE_CHARS` alphanumeric characters or is mostly `?`/U+FFFD garbage; such a layer
+   is *replaced* by the OCR text instead of being concatenated with it.
+
+The cache key includes every knob above (`OCR_CACHE_VERSION`), so tuning them re-runs
+recognition instead of silently reusing old results. `GET /api/health` reports Tesseract and
+its installed language data under `checks.ocr`.
+
+Tuning hints: raise `OCR_DPI` (300 → 400) for small fonts, add `4`/`11` to `OCR_PSM` for
+multi-column or sparse pages, lower `OCR_MIN_CONFIDENCE` when a mixed-language page keeps
+switching to English. Handwriting, stamps and complex tables remain weak points.
+
+---
+
 ## Limitations & post-MVP roadmap
 
-* Scanned PDFs use Tesseract (`rus+eng`, tessdata_best) with per-page detection; handwriting,
-  stamps and complex tables are still weak — the next step is a stronger engine or a cloud OCR.
+* Scanned PDFs use Tesseract (`rus+eng`, tessdata_best) with the preprocessing and multi-PSM
+  pipeline described in **OCR quality**; handwriting, stamps and complex tables are still weak —
+  the next step is a stronger engine or a cloud OCR.
 * Generated DOCX supports headings, tables, inline formatting, code blocks and base64 images;
   XLSX supports styles, number formats, merges, freeze panes and filters. Arbitrary layouts,
   charts and images from arbitrary sources still need the planned Python sandbox.
@@ -539,10 +566,10 @@ AI-created XLSX with a second sheet, ZIP download/extract and operation undo.
 * Legacy `.doc`/`.xls`/`.ppt` stay on the built-in viewers: OnlyOffice would silently rewrite them
   into OOXML on save. OnlyOffice Community Edition allows ~20 simultaneous editing sessions.
 * Chat attachments are capped (8 nodes, 12k chars each) — rely on RAG for large corpora.
-* Single-user stub only: no login/sessions, no per-user ACLs, no audit export.
 * No global “re-index everything” button in the UI (per project/folder reindex exists); add a Celery
   `reindex_all` route + progress bar.
-* Embeddings are recomputed on every save; add content hashing to skip unchanged files.
+* Unchanged files are not re-embedded, but a large edited document is still re-embedded as a whole
+  (chunk-level diff is pending).
 * Streaming markdown jumps slightly while a code fence is incomplete — add a buffer heuristic.
 * Images are previewed and OCR-indexed, but there is no vision chat over them yet.
 * Multi-user workspaces, share links, S3 blob storage, per-workspace Qdrant namespaces.
