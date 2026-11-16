@@ -63,6 +63,17 @@ async def revert_operation(db: AsyncSession, operation: Operation) -> str:
         if node is not None:
             snapshot = await node_service.delete_node(db, node)
             logger.info("Undo: removed %s node(s)", len(snapshot.get("nodes", [])))
+    elif action == "delete_nodes":
+        removed = 0
+        for raw_id in undo.get("node_ids") or []:
+            try:
+                node = await db.get(Node, uuid.UUID(str(raw_id)))
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if node is not None:
+                await node_service.delete_node(db, node)
+                removed += 1
+        logger.info("Undo: removed %s node(s) of a multi-file operation", removed)
     elif action == "restore_subtree":
         restored = await node_service.restore_snapshot(db, undo)
         if restored is None:

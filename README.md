@@ -195,7 +195,7 @@ resize the chat (320 px … width minus 320 px for the viewer); double-click the
 │       │   ├── embeddings.py   # batching + retries
 │       │   ├── indexer.py      # parse → chunk → embed → upsert
 │       │   ├── rag.py          # retrieval + citation objects
-│       │   ├── tools.py        # 13 AI tools + undo records (project-scoped)
+│       │   ├── tools.py        # 14 AI tools + undo records (project-scoped)
 │       │   ├── agent.py        # streaming + tool loop, one project of context
 │       │   ├── operations.py   # rollback of AI actions
 │       │   ├── users.py        # accounts, tokens, per-account model connections
@@ -302,6 +302,14 @@ The backend retrieves the top chunks from Qdrant, injects them into the system p
 contains `[1]`, `[2]` markers rendered as clickable chips under the message. Clicking a chip opens
 the source file in the viewer. If embeddings are unavailable the answer is produced without
 retrieval and the UI shows a `RAG off` chip.
+
+### 2b. Split a PDF (images preserved)
+
+> Split `Element MSK стройки.pdf` into one file per section: pages 1-3, 4-7 and 8-12.
+
+The model calls `pdf_split` with `parts = [{name, pages}]`. Pages are copied as PDF objects, so
+embedded photos, scans, stamps and the original layout survive. Do **not** use `create_pdf` for
+this: it re-typesets extracted text and therefore loses images.
 
 ### 3. Edit an Excel file through chat
 

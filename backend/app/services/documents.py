@@ -171,6 +171,49 @@ def build_pdf(text: str, *, title: str | None = None) -> bytes:
     return buffer.getvalue()
 
 
+def pdf_page_count(data: bytes) -> int:
+    from pypdf import PdfReader
+
+    return len(PdfReader(io.BytesIO(data)).pages)
+
+
+def build_pdf_parts(
+    data: bytes, parts: Sequence[tuple[str, Sequence[int]]]
+) -> list[tuple[str, bytes]]:
+    """Copy page ranges into new PDFs.
+
+    Pages are copied as objects, so embedded images, scans, vector graphics and
+    the original layout are preserved - unlike :func:`build_pdf`, which
+    re-typesets plain text and therefore drops everything visual.
+    ``parts`` contains 1-based page numbers.
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(io.BytesIO(data))
+    if reader.is_encrypted:
+        raise ValueError("the PDF is password-protected")
+    total = len(reader.pages)
+    metadata = reader.metadata
+    output: list[tuple[str, bytes]] = []
+    for name, pages in parts:
+        writer = PdfWriter()
+        for number in pages:
+            if number < 1 or number > total:
+                raise ValueError(f"page {number} is outside 1..{total}")
+            writer.add_page(reader.pages[number - 1])
+        if metadata:
+            try:
+                writer.add_metadata(
+                    {str(key): str(value) for key, value in metadata.items()}
+                )
+            except Exception:  # noqa: BLE001 - metadata is best effort
+                logger.debug("Could not copy PDF metadata", exc_info=True)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        output.append((name, buffer.getvalue()))
+    return output
+
+
 def build_text_document(name: str, text: str) -> bytes:
     """Generate bytes for a file name, choosing the right generator by extension."""
     from pathlib import Path

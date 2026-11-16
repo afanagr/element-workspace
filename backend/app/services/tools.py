@@ -21,7 +21,7 @@ from app.llm.factory import registry
 from app.llm.schemas import ChatMessage, TextDelta, ToolSpec
 from app.models import Node, Operation
 from app.services import nodes as node_service
-from app.services.documents import build_text_document
+from app.services.documents import build_pdf_parts, build_text_document, pdf_page_count
 from app.services.indexer import enqueue_index
 from app.services.parsing import UnsupportedFormat, parse_document
 from app.services.storage import storage
@@ -199,10 +199,33 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="create_pdf",
-        description="Generate a PDF document from Markdown-ish text.",
+        description="Generate a NEW PDF document from Markdown-ish text (text only, no images).",
         parameters=_obj(
             {"parent_id": _STR, "name": _STR, "content": _STR},
             ["parent_id", "name", "content"],
+        ),
+    ),
+    ToolSpec(
+        name="pdf_split",
+        description=(
+            "Split an existing PDF into new PDF files by copying page ranges. Pages are "
+            "copied as-is, so images, scans, stamps and the original layout are preserved. "
+            "Use this (never create_pdf) to split or extract pages of an existing PDF. "
+            "parts = [{name, pages}] where pages looks like '1-3,5' or '4'."
+        ),
+        parameters=_obj(
+            {
+                "node_id": _STR,
+                "parts": {
+                    "type": "array",
+                    "items": _obj({"name": _STR, "pages": _STR}, ["name", "pages"]),
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Optional destination folder (defaults to the PDF's folder)",
+                },
+            },
+            ["node_id", "parts"],
         ),
     ),
 ]
@@ -321,17 +344,21 @@ async def _read_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     if truncated:
         text = text[:limit] + "\n…[truncated]"
     path = await node_service.node_path(ctx.db, node)
-    summary = f"File: {path} ({node.size} bytes)\n{text}"
-    return ToolResult(
-        True,
-        summary,
-        {
-            "node_id": str(node.id),
-            "path": path,
-            "chars": len(text),
-            "truncated": truncated,
-        },
-    )
+    pages = parsed.meta.get("pages") if isinstance(parsed.meta, dict) else None
+    header = f"File: {path} ({node.size} bytes"
+    if pages:
+        header += f", {pages} pages"
+    header += ")\n"
+    summary = f"{header}{text}"
+    data: dict[str, Any] = {
+        "node_id": str(node.id),
+        "path": path,
+        "chars": len(text),
+        "truncated": truncated,
+    }
+    if pages:
+        data["pages"] = pages
+    return ToolResult(True, summary, data)
 
 
 async def _search_documents(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -724,6 +751,123 @@ async def _create_pdf(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     return await _write_file(ctx, payload)
 
 
+def _parse_page_ranges(spec: str, total: int) -> list[int]:
+    pages: list[int] = []
+    seen: set[int] = set()
+    for chunk in re.split(r"[,\s]+", (spec or "").strip()):
+        if not chunk:
+            continue
+        if "-" in chunk:
+            start_raw, _, end_raw = chunk.partition("-")
+            try:
+                start, end = int(start_raw), int(end_raw)
+            except ValueError as exc:
+                raise ToolError(f"Invalid page range '{chunk}'") from exc
+        else:
+            try:
+                start = end = int(chunk)
+            except ValueError as exc:
+                raise ToolError(f"Invalid page number '{chunk}'") from exc
+        if start > end:
+            start, end = end, start
+        if start < 1 or end > total:
+            raise ToolError(f"Page range '{chunk}' is outside 1..{total}")
+        for number in range(start, end + 1):
+            if number not in seen:
+                seen.add(number)
+                pages.append(number)
+    if not pages:
+        raise ToolError("pages is required, e.g. '1-3,5'")
+    return pages
+
+
+async def _pdf_split(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    node = await _resolve_node(ctx, args.get("node_id"))
+    if node.kind != "file" or not node.storage_key:
+        raise ToolError("pdf_split requires an existing PDF file")
+    if node_service.extension_of(node.name) != ".pdf":
+        raise ToolError("pdf_split supports .pdf files only")
+    data = await storage.read_bytes(node.storage_key)
+    try:
+        total_pages = await anyio.to_thread.run_sync(pdf_page_count, data)
+    except Exception as exc:  # noqa: BLE001
+        raise ToolError(f"Cannot open {node.name}: {exc}") from exc
+
+    raw_parts = args.get("parts") or []
+    if not isinstance(raw_parts, list) or not raw_parts:
+        raise ToolError("parts must be a non-empty list of {name, pages}")
+    if len(raw_parts) > 20:
+        raise ToolError("at most 20 parts per call")
+
+    parent_id = args.get("parent_id") or node.parent_id
+    if not parent_id:
+        raise ToolError("Cannot determine the destination folder")
+    parent = await _resolve_node(ctx, parent_id)
+    if parent.kind not in ("project", "folder"):
+        raise ToolError("parent_id must point to a project or folder")
+
+    plans: list[tuple[str, list[int]]] = []
+    names: set[str] = set()
+    for index, raw in enumerate(raw_parts, start=1):
+        if not isinstance(raw, dict):
+            raise ToolError("Each part must be an object {name, pages}")
+        name = node_service.sanitize_name(str(raw.get("name") or f"part-{index}.pdf"))
+        if not name.lower().endswith(".pdf"):
+            name = f"{name}.pdf"
+        if name.lower() in names:
+            raise ToolError(f"Duplicate part name: {name}")
+        names.add(name.lower())
+        existing = await node_service.find_child(ctx.db, parent.id, name)
+        if existing is not None:
+            raise ToolError(
+                f"'{name}' already exists in the destination folder; choose another name"
+            )
+        plans.append((name, _parse_page_ranges(str(raw.get("pages") or ""), total_pages)))
+
+    try:
+        payloads = await anyio.to_thread.run_sync(build_pdf_parts, data, plans)
+    except Exception as exc:  # noqa: BLE001
+        raise ToolError(f"Cannot split {node.name}: {exc}") from exc
+
+    created: list[dict[str, Any]] = []
+    for (name, pages), (_, payload) in zip(plans, payloads):
+        created_node, _ = await node_service.create_file(
+            ctx.db, parent.id, name, payload, created_by="ai", note="pdf_split"
+        )
+        enqueue_index([created_node.id])
+        ctx.changed_nodes.append({"id": str(created_node.id), "event": "created"})
+        path = await node_service.node_path(ctx.db, created_node)
+        created.append(
+            {
+                "node_id": str(created_node.id),
+                "path": path,
+                "pages": pages,
+                "bytes": len(payload),
+            }
+        )
+
+    operation_id = await _record_operation(
+        ctx,
+        tool_name="pdf_split",
+        description=(
+            f"Split {node.name} into {len(created)} PDF(s) "
+            f"({', '.join(item['path'] for item in created)})"
+        ),
+        node_id=None,
+        undo={"action": "delete_nodes", "node_ids": [item["node_id"] for item in created]},
+    )
+    pages_summary = ", ".join(
+        f"{item['path']} (pages {item['pages'][0]}-{item['pages'][-1]})" for item in created
+    )
+    return ToolResult(
+        True,
+        f"Split {node.name} ({total_pages} pages) into {len(created)} PDF(s) with pages "
+        f"copied as-is (images and layout preserved): {pages_summary}.",
+        {"source_pages": total_pages, "parts": created},
+        operation_id,
+    )
+
+
 # ------------------------------------------------------------- dispatcher
 _HANDLERS = {
     "list_workspace": _list_workspace,
@@ -739,6 +883,7 @@ _HANDLERS = {
     "search_documents": _search_documents,
     "translate_file": _translate_file,
     "create_pdf": _create_pdf,
+    "pdf_split": _pdf_split,
 }
 
 

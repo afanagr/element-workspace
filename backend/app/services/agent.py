@@ -43,6 +43,8 @@ Rules:
 - You can inspect and modify the project files ONLY through the provided tools.
 - Call list_workspace when you need to discover ids, then read_file / excel_read BEFORE editing.
 - Spreadsheets: use excel_write (cells/rows) or excel_add_sheet; text documents: write_file.
+- PDFs: to split or extract pages of an existing PDF use pdf_split (pages are copied, so images
+  and layout stay). create_pdf only builds a NEW text PDF and cannot carry images over.
 - Delete/rename/move are allowed; the user can undo every action, so mention what you changed.
 - When retrieved context is provided, cite it inline as [1], [2] - exactly matching the fragment numbers.
 - Never claim a file was created, changed or deleted unless a tool call succeeded.
@@ -63,6 +65,7 @@ MUTATING_TOOLS = frozenset(
         "excel_add_sheet",
         "translate_file",
         "create_pdf",
+        "pdf_split",
     }
 )
 
@@ -84,6 +87,11 @@ _FILE_HINT_RE = re.compile(
     r"\.(txt|csv|md|json|ya?ml|log|py|js|ts|tsx|html|htm))",
     re.IGNORECASE,
 )
+_PDF_SPLIT_RE = re.compile(
+    r"(pdf.*(разб|раздел|разбить|по страниц|извлек|выдел|split|extract)"
+    r"|(разб|раздел|разбить|по страниц|извлек|выдел|split|extract).*pdf)",
+    re.IGNORECASE,
+)
 
 MAX_TOOL_CORRECTIONS = 2
 NO_MUTATION_REMINDER = (
@@ -96,6 +104,17 @@ NO_MUTATION_REMINDER = (
 NOT_APPLIED_NOTE = (
     "\n\n⚠️ Изменения не применены: модель не вызвала ни одного инструмента записи."
 )
+PDF_SPLIT_REMINDER = (
+    "This is a PDF split/extract request. create_pdf rebuilds plain text and drops all "
+    "images, so it is WRONG here. Call pdf_split with parts=[{name, pages}] and page "
+    "ranges (e.g. pages='1-3' or '4,7-9'); pdf_split copies pages as-is and keeps images. "
+    "If you already created text-only PDFs with create_pdf, delete them with delete_node "
+    "and then call pdf_split."
+)
+PDF_NOT_SPLIT_NOTE = (
+    "\n\n⚠️ PDF не разделён постранично: изображения могли не сохраниться. "
+    "Для разбиения PDF нужен инструмент pdf_split (копирует страницы целиком)."
+)
 
 
 def _is_edit_request(text: str, has_attachments: bool = False) -> bool:
@@ -104,6 +123,12 @@ def _is_edit_request(text: str, has_attachments: bool = False) -> bool:
     if not _ACTION_RE.search(text):
         return False
     return has_attachments or bool(_FILE_HINT_RE.search(text))
+
+
+def _is_pdf_split_request(text: str) -> bool:
+    if _QUESTION_RE.search(text):
+        return False
+    return bool(_PDF_SPLIT_RE.search(text or ""))
 
 
 @dataclass(slots=True)
@@ -294,7 +319,9 @@ async def run_agent(
     started_at = time.perf_counter()
     specs = tool_specs()
     edit_requested = _is_edit_request(request.text, bool(request.attachments))
+    pdf_split_requested = _is_pdf_split_request(request.text)
     mutations_done = 0
+    pdf_split_done = False
     corrections = 0
 
     for _step in range(max(1, settings.max_agent_steps)):
@@ -426,7 +453,24 @@ async def run_agent(
         )
 
         if not tool_calls:
-            if edit_requested and mutations_done == 0:
+            if pdf_split_requested and not pdf_split_done:
+                if corrections < MAX_TOOL_CORRECTIONS:
+                    corrections += 1
+                    logger.info(
+                        "PDF split requested but pdf_split was not called; asking again "
+                        "(%s/%s)",
+                        corrections,
+                        MAX_TOOL_CORRECTIONS,
+                    )
+                    messages.append(
+                        ChatMessage(
+                            role="user",
+                            content="[AUTOMATIC CHECK] " + PDF_SPLIT_REMINDER,
+                        )
+                    )
+                    continue
+                answer_text = f"{answer_text.rstrip()}{PDF_NOT_SPLIT_NOTE}"
+            elif edit_requested and mutations_done == 0:
                 if corrections < MAX_TOOL_CORRECTIONS:
                     corrections += 1
                     logger.info(
@@ -477,6 +521,8 @@ async def run_agent(
         tool_payloads: list[dict[str, Any]] = []
         for call in tool_calls:
             result = await execute_tool(ctx, call.name, call.arguments)
+            if result.ok and call.name == "pdf_split":
+                pdf_split_done = True
             if result.ok and call.name in MUTATING_TOOLS:
                 mutations_done += 1
             await db.commit()
