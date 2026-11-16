@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/i18n';
 import type { VersionInfo, WorkNode } from '@/lib/types';
 import { fileGlyph, formatBytes, indexStatusKey, indexStatusTone } from '@/lib/utils';
 
-import { ConfirmModal, PromptModal } from './Modal';
+import { ConfirmModal, Modal, PromptModal } from './Modal';
 import { DocxViewer } from './viewers/DocxViewer';
 import { ExcelViewer } from './viewers/ExcelViewer';
 import { ExtractViewer } from './viewers/ExtractViewer';
@@ -47,6 +47,9 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
   const [deleting, setDeleting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [versions, setVersions] = useState<VersionInfo[] | null>(null);
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrText, setOcrText] = useState<string | null>(null);
+  const [ocrPages, setOcrPages] = useState(0);
   const [officeSession, setOfficeSession] = useState<{
     nodeId: string;
     session: OfficeSession;
@@ -62,6 +65,8 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
     setVersions(null);
     setRenaming(false);
     setDeleting(false);
+    setOcrText(null);
+    setOcrPages(0);
     setOfficeSession(null);
     setOfficeLoading(false);
   }, [node?.id]);
@@ -103,6 +108,50 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
 
   const indexText = t(indexStatusKey(node.index_status), { status: node.index_status });
   const indexTone = indexStatusTone(node.index_status);
+
+  const runOcr = async () => {
+    if (ocrBusy) return;
+    setOcrBusy(true);
+    try {
+      const result = await api.ocr(node.id);
+      const pages = Number(result.meta?.ocr_pages ?? 0);
+      setOcrText(result.text);
+      setOcrPages(pages);
+      onNotify(
+        t('viewer.ocrDone', { chars: result.text.length, pages }),
+        result.text.trim() ? 'info' : 'error',
+      );
+      await onRefresh();
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setOcrBusy(false);
+    }
+  };
+
+  const copyOcr = async () => {
+    if (!ocrText) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(ocrText);
+      } else {
+        // Plain HTTP on the LAN is not a secure context, so the async clipboard
+        // API is unavailable; fall back to the legacy selection-based copy.
+        const area = document.createElement('textarea');
+        area.value = ocrText;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(area);
+        if (!ok) throw new Error('copy failed');
+      }
+      onNotify(t('viewer.ocrCopied'));
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : String(error), 'error');
+    }
+  };
 
   const rename = async (name: string) => {
     setBusy(true);
@@ -225,6 +274,17 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
           >
             {t('common.attach')}
           </button>
+          {node.kind === 'file' && node.extension === '.pdf' ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void runOcr()}
+              disabled={ocrBusy}
+              title={t('viewer.ocrHint')}
+            >
+              {ocrBusy ? t('viewer.ocrBusy') : t('viewer.ocr')}
+            </button>
+          ) : null}
           {node.kind === 'file' ? (
             <button
               type="button"
@@ -274,6 +334,42 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
           </div>
         )}
       </div>
+
+      <Modal
+        open={ocrText !== null}
+        title={t('viewer.ocrTitle', { name: node.name })}
+        subtitle={t('viewer.ocrHint')}
+        width="max-w-3xl"
+        onClose={() => setOcrText(null)}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void copyOcr()}
+              disabled={!ocrText}
+            >
+              {t('viewer.ocrCopy')}
+            </button>
+            <button type="button" className="btn" onClick={() => setOcrText(null)}>
+              {t('common.close')}
+            </button>
+          </>
+        }
+      >
+        {ocrText?.trim() ? (
+          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100">
+            {ocrText}
+          </pre>
+        ) : (
+          <p className="text-xs text-slate-500">{t('viewer.ocrEmpty')}</p>
+        )}
+        {ocrPages ? (
+          <p className="mt-2 text-[10px] text-slate-500">
+            {t('viewer.ocrMeta', { pages: ocrPages })}
+          </p>
+        ) : null}
+      </Modal>
 
       <PromptModal
         open={renaming}

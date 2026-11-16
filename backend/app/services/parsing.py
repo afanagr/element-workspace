@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import dataclasses
+import hashlib
 import io
 import shutil
 import subprocess
@@ -17,6 +18,13 @@ from typing import Any
 
 from app.config import settings
 from app.logging_config import get_logger
+from app.services.ocr import (
+    OcrUnavailable,
+    PdfPageOcr,
+    languages as ocr_languages,
+    load_cached,
+    store_cached,
+)
 from app.services.storage import decode_bytes
 
 logger = get_logger(__name__)
@@ -87,10 +95,6 @@ MIME_BY_EXTENSION: dict[str, str] = {
 
 class UnsupportedFormat(Exception):
     """Raised when a file cannot be parsed into text."""
-
-
-class OcrUnavailable(Exception):
-    """Raised when Tesseract is missing from the image."""
 
 
 @dataclasses.dataclass(slots=True)
@@ -308,21 +312,102 @@ def _parse_doc(data: bytes) -> ParsedDocument:
 
 
 # ----------------------------------------------------------------------- pdf
-def _parse_pdf(data: bytes) -> ParsedDocument:
+def _cached_pdf_document(payload: dict[str, Any]) -> ParsedDocument:
+    segments = [
+        Segment(str(item.get("label") or "page"), str(item.get("text") or ""))
+        for item in payload.get("segments") or []
+    ]
+    return ParsedDocument(
+        "pdf",
+        str(payload.get("text") or ""),
+        segments,
+        dict(payload.get("meta") or {}),
+    )
+
+
+def _pdf_cache_payload(document: ParsedDocument) -> dict[str, Any]:
+    return {
+        "text": document.text,
+        "segments": [{"label": segment.label, "text": segment.text} for segment in document.segments],
+        "meta": document.meta,
+    }
+
+
+def _meaningful_chars(text: str) -> int:
+    """Letters/digits only: scans often carry a tiny junk header in the layer."""
+    return sum(1 for char in text if char.isalnum())
+
+
+def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
     import pdfplumber
+
+    sha256 = hashlib.sha256(data).hexdigest() if (ocr and settings.ocr_pdf_enabled) else ""
+    if sha256:
+        cached = load_cached(sha256)
+        if cached is not None:
+            return _cached_pdf_document(cached)
 
     segments: list[Segment] = []
     pages = 0
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
-        pages = len(pdf.pages)
-        for index, page in enumerate(pdf.pages, start=1):
-            page_text = page.extract_text() or ""
-            if page_text.strip():
-                segments.append(Segment(label=f"page:{index}", text=page_text))
+    ocr_pages = 0
+    recognizer: PdfPageOcr | None = None
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            pages = len(pdf.pages)
+            for index, page in enumerate(pdf.pages, start=1):
+                page_text = page.extract_text() or ""
+                used_ocr = False
+                if (
+                    ocr
+                    and settings.ocr_pdf_enabled
+                    and ocr_pages < settings.ocr_max_pages
+                    and _meaningful_chars(page_text) < settings.ocr_min_page_chars
+                ):
+                    try:
+                        if recognizer is None:
+                            recognizer = PdfPageOcr(data)
+                        ocr_text, info = recognizer.recognize(index - 1)
+                    except OcrUnavailable:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - one bad page must not kill the document
+                        logger.warning("OCR failed for page %s of the PDF: %s", index, exc)
+                    else:
+                        if ocr_text:
+                            used_ocr = True
+                            ocr_pages += 1
+                            page_text = f"{page_text}\n{ocr_text}".strip() if page_text.strip() else ocr_text
+                            logger.info(
+                                "OCR page %s/%s: %s chars in %ss",
+                                index,
+                                pages,
+                                len(ocr_text),
+                                info.get("seconds"),
+                            )
+                if page_text.strip():
+                    label = f"page:{index}" + (" (ocr)" if used_ocr else "")
+                    segments.append(Segment(label, page_text))
+    finally:
+        if recognizer is not None:
+            recognizer.close()
+
     text = "\n\n".join(segment.text for segment in segments)
-    return ParsedDocument(
-        "pdf", text, segments, {"pages": pages, "scanned": not segments, "needs_ocr": not segments}
+    document = ParsedDocument(
+        "pdf",
+        text,
+        segments,
+        {
+            "pages": pages,
+            "scanned": not segments,
+            "needs_ocr": not segments,
+            "ocr": ocr_pages > 0,
+            "ocr_pages": ocr_pages,
+            "ocr_engine": "tesseract" if ocr_pages else None,
+            "ocr_lang": ocr_languages() if ocr_pages else None,
+        },
     )
+    if sha256 and ocr_pages:
+        store_cached(sha256, _pdf_cache_payload(document))
+    return document
 
 
 # --------------------------------------------------------------------- image
@@ -345,9 +430,9 @@ def _parse_image(data: bytes) -> ParsedDocument:
         width, height = image.size
         mode = image.mode
         try:
-            text = pytesseract.image_to_string(image, lang=settings.tesseract_lang)
+            text = pytesseract.image_to_string(image, lang=ocr_languages())
         except pytesseract.TesseractError:
-            logger.warning("OCR with lang=%s failed, retrying with eng", settings.tesseract_lang)
+            logger.warning("OCR with lang=%s failed, retrying with eng", ocr_languages())
             text = pytesseract.image_to_string(image, lang="eng")
     text = text.strip()
     return ParsedDocument(
@@ -380,8 +465,12 @@ def _parse_text(data: bytes) -> ParsedDocument:
 
 
 # --------------------------------------------------------------------- main
-def parse_document(name: str, data: bytes) -> ParsedDocument:
-    """Parse a file into text segments. Blocking - call from a worker thread."""
+def parse_document(name: str, data: bytes, ocr: bool = False) -> ParsedDocument:
+    """Parse a file into text segments. Blocking - call from a worker thread.
+
+    ``ocr=True`` additionally rasterises and recognises PDF pages that have no
+    usable text layer; it is intentionally opt-in so preview endpoints stay fast.
+    """
     ext = extension_of(name)
     try:
         if ext in (".xlsx", ".xlsm"):
@@ -395,7 +484,7 @@ def parse_document(name: str, data: bytes) -> ParsedDocument:
         if ext == ".doc":
             return _parse_doc(data)
         if ext == ".pdf":
-            return _parse_pdf(data)
+            return _parse_pdf(data, ocr=ocr)
         if ext in IMAGE_EXTENSIONS:
             return _parse_image(data)
         if ext in TEXT_EXTENSIONS:

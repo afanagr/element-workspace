@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import uuid
 
 import anyio
@@ -34,7 +36,9 @@ from app.services.archive import build_zip, extract_archive, zip_response
 from app.services.documents import apply_sheet_edits, build_pdf_page_edit
 from app.services.indexer import enqueue_index
 from app.services.parsing import (
+    IMAGE_EXTENSIONS,
     OcrUnavailable,
+    ParsedDocument,
     UnsupportedFormat,
     parse_document,
     view_kind,
@@ -205,6 +209,20 @@ async def node_content(
     )
 
 
+def _text_preview(node: Node, parsed: ParsedDocument, max_chars: int) -> TextPreviewOut:
+    return TextPreviewOut(
+        node_id=node.id,
+        name=node.name,
+        view_kind=view_kind(node.name, node.mime),
+        text=parsed.text[:max_chars],
+        segments=[
+            {"label": segment.label, "text": segment.text[:20000]} for segment in parsed.segments
+        ],
+        meta=parsed.meta,
+        truncated=len(parsed.text) > max_chars,
+    )
+
+
 @router.get("/nodes/{node_id}/text", response_model=TextPreviewOut)
 async def node_text(
     node_id: uuid.UUID,
@@ -222,17 +240,40 @@ async def node_text(
         raise node_service.NodeError(str(exc), status_code=422) from exc
     except OcrUnavailable as exc:
         raise node_service.NodeError(f"OCR unavailable: {exc}", status_code=503) from exc
-    return TextPreviewOut(
-        node_id=node.id,
-        name=node.name,
-        view_kind=view_kind(node.name, node.mime),
-        text=parsed.text[:max_chars],
-        segments=[
-            {"label": segment.label, "text": segment.text[:20000]} for segment in parsed.segments
-        ],
-        meta=parsed.meta,
-        truncated=len(parsed.text) > max_chars,
-    )
+    return _text_preview(node, parsed, max_chars)
+
+
+@router.post("/nodes/{node_id}/ocr", response_model=TextPreviewOut)
+async def node_ocr(
+    node_id: uuid.UUID,
+    max_chars: int = Query(default=60000, ge=1000, le=200000),
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> TextPreviewOut:
+    """Recognise text on a scanned PDF (or an image) and queue re-indexing.
+
+    OCR runs in a worker thread; the result is cached by content hash, so the
+    following index pass and repeated clicks are cheap.
+    """
+    node = await node_service.get_node_for(db, node_id, user)
+    if node.kind != "file" or not node.storage_key:
+        raise node_service.NodeError("This node has no content", status_code=404)
+    extension = node_service.extension_of(node.name)
+    if extension != ".pdf" and extension not in IMAGE_EXTENSIONS:
+        raise node_service.NodeError(
+            "Text recognition is available for PDF and image files", status_code=415
+        )
+    data = await storage.read_bytes(node.storage_key)
+    try:
+        parsed = await anyio.to_thread.run_sync(
+            partial(parse_document, node.name, data, True)
+        )
+    except UnsupportedFormat as exc:
+        raise node_service.NodeError(str(exc), status_code=422) from exc
+    except OcrUnavailable as exc:
+        raise node_service.NodeError(f"OCR unavailable: {exc}", status_code=503) from exc
+    enqueue_index([node.id])
+    return _text_preview(node, parsed, max_chars)
 
 
 @router.get("/nodes/{node_id}/source")

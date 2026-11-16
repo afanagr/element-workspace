@@ -90,6 +90,18 @@ class Settings(BaseSettings):
     tesseract_lang: str = "eng+rus"
     tesseract_cmd: str = ""
 
+    # ------------------------------------------------------------------- ocr
+    # Scanned PDFs are rasterised per page and recognised with Tesseract.
+    # Text pages are left untouched, so normal PDFs do not pay the OCR cost.
+    ocr_pdf_enabled: bool = True
+    ocr_lang: str = ""  # empty -> tesseract_lang
+    ocr_dpi: int = 300
+    ocr_max_pages: int = 200
+    ocr_min_page_chars: int = 20
+    ocr_timeout_seconds: int = 120
+    ocr_deskew: bool = True
+    ocr_min_orientation_confidence: float = 1.0
+
     # --------------------------------------------------------- onlyoffice
     # OnlyOffice Document Server replaces the built-in editors when configured.
     # Set ONLYOFFICE_ENABLED=false (or clear the URL/secret) to fall back to the

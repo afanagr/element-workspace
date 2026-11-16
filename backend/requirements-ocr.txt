@@ -1,0 +1,3 @@
+# OCR rasteriser (kept separate from the heavy builder layer so adding it does
+# not invalidate the multi-GB torch/embeddings layer).
+pypdfium2==5.15.2

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from functools import partial
 from typing import Iterable
 
 import anyio
@@ -55,7 +56,9 @@ async def index_node(node_id: str | uuid.UUID) -> str:
 
         try:
             data = await storage.read_bytes(node.storage_key)
-            parsed = await anyio.to_thread.run_sync(parse_document, node.name, data)
+            parsed = await anyio.to_thread.run_sync(
+                partial(parse_document, node.name, data, ocr=True)
+            )
             chunks = chunk_segments(
                 parsed.segments, size=settings.chunk_size, overlap=settings.chunk_overlap
             )

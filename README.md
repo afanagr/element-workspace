@@ -9,7 +9,7 @@ AI read, search **and actually edit** them — with citations, streaming answers
   sheets and cells; writes DOCX/PDF/Markdown; translates documents. Every mutating tool call is
   recorded as a reversible operation.
 * **RAG with citations** — every document is parsed (Excel cells, Word, PDF, Tesseract OCR for
-  images), chunked, embedded and stored in Qdrant. Answers cite `[1] file.pdf (page:3)`.
+  images and scanned PDF pages), chunked, embedded and stored in Qdrant. Answers cite `[1] file.pdf (page:3)`.
 * **Any OpenAI-compatible model, per account** — the administrator attaches model connections
   (name, base URL, key, model) to every user; the chat layer speaks the OpenAI dialect to each of
   them (DeepSeek, Qwen/DashScope, Ollama, vLLM, LM Studio, internal gateways) with tool calling,
@@ -393,6 +393,7 @@ REST under `/api` (OpenAPI at `/api/docs`), JSON everywhere, NDJSON/WebSocket fo
 | GET | `/api/nodes/{id}/download` | file stream or ZIP for folders (`?token=` allowed) |
 | GET | `/api/nodes/{id}/content` | inline bytes (viewers) with ETag (`?token=` allowed) |
 | GET | `/api/nodes/{id}/text` | extracted text/segments/meta (viewers + OCR) |
+| POST | `/api/nodes/{id}/ocr` | recognise a scanned PDF/image, cache the result and re-index |
 | PUT | `/api/nodes/{id}/content` · `/api/nodes/{id}/sheet` | save a directly edited text file / spreadsheet cells (new version + reindex) |
 | GET | `/api/nodes/{id}/versions` · POST `…/versions/{version_id}/revert` | history |
 | POST | `/api/nodes/{id}/reindex` | queue indexing for a file/folder/project |
@@ -500,7 +501,7 @@ AI-created XLSX with a second sheet, ZIP download/extract and operation undo.
 | `/api/health` = `degraded` | inspect the `checks` object: database/qdrant/redis, missing keys, insecure secret, RAG disabled. |
 | `429` in chat | the message shows a rate-limit card with **Switch provider**; the fallback chain also auto-switches before the first token. |
 | Files stay `queued` | worker not running (`docker compose logs worker`) — the API watchdog indexes in-process after 25 s. |
-| `index failed` on PDF | scanned PDF without a text layer; OCR currently applies to images, not PDF pages (roadmap). |
+| `index failed` on PDF | check that Tesseract is present in the image (`docker compose exec backend tesseract --list-langs`); OCR can be disabled with `OCR_PDF_ENABLED=false`. |
 | Legacy `.doc` shows text only | the viewer falls back to extracted text (`antiword`/`catdoc`); download the original for exact layout. |
 | `RAG off` chip | no embedding provider configured or Qdrant unhealthy. Set `EMBEDDING_PROVIDER=local` and install sentence-transformers. |
 | Keys “lost” after restart | `APP_SECRET_KEY` changed → stored ciphertext cannot be decrypted; re-enter keys. |
@@ -513,7 +514,8 @@ AI-created XLSX with a second sheet, ZIP download/extract and operation undo.
 
 ## Limitations & post-MVP roadmap
 
-* Scanned PDFs: page-image OCR (render → Tesseract) instead of text-layer-only extraction.
+* Scanned PDFs use Tesseract (`rus+eng`, tessdata_best) with per-page detection; handwriting,
+  stamps and complex tables are still weak — the next step is a stronger engine or a cloud OCR.
 * Tool-call *deltas* are collapsed into one card per call (no partial argument view).
 * Excel editing supports `.xlsx`/`.xlsm`; `.xls` is read-only (write a new `.xlsx`).
 * Legacy `.doc`/`.xls`/`.ppt` stay on the built-in viewers: OnlyOffice would silently rewrite them

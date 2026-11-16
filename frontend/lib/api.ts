@@ -205,6 +205,8 @@ export const api = {
     return `${API_BASE}/api/nodes/${nodeId}/content${query ? `?${query}` : ''}`;
   },
   text: (nodeId: string) => request<TextPreview>(`/api/nodes/${nodeId}/text`),
+  ocr: (nodeId: string) =>
+    request<TextPreview>(`/api/nodes/${nodeId}/ocr`, { method: 'POST' }),
   saveText: (nodeId: string, content: string) =>
     request<WorkNode>(`/api/nodes/${nodeId}/content`, {
       method: 'PUT',
