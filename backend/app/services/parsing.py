@@ -363,7 +363,6 @@ def _parse_pdf(data: bytes, *, ocr: bool = False) -> ParsedDocument:
                 used_ocr = False
                 if (
                     ocr
-                    and settings.ocr_pdf_enabled
                     and _meaningful_chars(page_text) < settings.ocr_min_page_chars
                 ):
                     out_of_pages = ocr_pages >= settings.ocr_max_pages

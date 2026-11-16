@@ -57,7 +57,7 @@ async def index_node(node_id: str | uuid.UUID) -> str:
         try:
             data = await storage.read_bytes(node.storage_key)
             parsed = await anyio.to_thread.run_sync(
-                partial(parse_document, node.name, data, ocr=True)
+                partial(parse_document, node.name, data, settings.ocr_pdf_enabled)
             )
             chunks = chunk_segments(
                 parsed.segments, size=settings.chunk_size, overlap=settings.chunk_overlap
