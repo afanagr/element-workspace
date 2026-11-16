@@ -206,7 +206,12 @@ def is_zip_bytes(data: bytes) -> bool:
 
 
 def spreadsheet_to_csv(data: bytes) -> bytes:
-    """Convert an XLSX returned by OnlyOffice back into the original CSV file."""
+    """Convert an XLSX returned by OnlyOffice back into the original CSV file.
+
+    Values are exported, not formulas: a CSV cell cannot hold a formula, so the
+    saved document keeps the computed result (same as opening it in Excel and
+    choosing "Save as CSV").
+    """
     import csv
     import io
 
@@ -244,7 +249,7 @@ def safe_source_url(url: str) -> str:
         if "." not in host:
             return url
         if settings.onlyoffice_hosts:
-            raise OfficeError("Document host is not allowed", status_code=400)
+            raise OfficeError("Document host is not allowed", status_code=400) from None
         return url
     if address.is_private or address.is_loopback:
         return url

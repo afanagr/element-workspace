@@ -1,0 +1,10 @@
+line-length = 100
+target-version = "py311"
+
+[lint]
+# B008 is the FastAPI `Depends(...)` default-argument pattern used everywhere.
+ignore = ["E501", "B008"]
+select = ["E", "F", "W", "B"]
+
+[lint.per-file-ignores]
+"backend/alembic/versions/*" = ["E402"]

@@ -1,0 +1,5 @@
+# Development / CI only - never installed into the runtime image.
+-r requirements.txt
+pytest==8.3.4
+pytest-asyncio==0.25.0
+ruff==0.17.5

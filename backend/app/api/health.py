@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import httpx
+
 from app import __version__
 from app.config import settings
 from app.db import get_db
@@ -39,6 +41,19 @@ async def _check_redis() -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
+async def _check_documentserver() -> tuple[bool, str]:
+    """OnlyOffice is optional: a configured but unreachable server is reported."""
+    if not settings.office_configured:
+        return True, "not configured"
+    url = f"{settings.onlyoffice_internal_url.rstrip('/')}/healthcheck"
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(url)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+    return response.status_code == 200, f"HTTP {response.status_code}"
+
+
 @router.get("/health")
 async def health(db: AsyncSession = Depends(get_db)) -> dict:
     """Public readiness probe (used by docker healthchecks and the UI banner).
@@ -49,6 +64,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
     db_ok, db_message = await _check_database(db)
     qdrant_ok, qdrant_message = await vector_store.health()
     redis_ok, redis_message = await _check_redis()
+    office_ok, office_message = await _check_documentserver()
 
     embedding_configured = ["local"] if local_embeddings_available() else []
     warnings: list[str] = []
@@ -71,6 +87,8 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         warnings.append(f"Vector database unavailable: {qdrant_message}")
     if not redis_ok:
         warnings.append(f"Redis unavailable: {redis_message} (Celery jobs will run inline)")
+    if not office_ok:
+        warnings.append(f"OnlyOffice Document Server unavailable: {office_message}")
 
     status = "ok"
     if not db_ok:
@@ -85,6 +103,7 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
             "database": {"ok": db_ok, "message": db_message},
             "qdrant": {"ok": qdrant_ok, "message": qdrant_message},
             "redis": {"ok": redis_ok, "message": redis_message},
+            "documentserver": {"ok": office_ok, "message": office_message},
         },
         "providers": {
             # Chat endpoints are per account (model_connections); the public

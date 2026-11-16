@@ -70,6 +70,24 @@ def map_openai_error(exc: Exception, provider: str) -> ProviderError:
     return ProviderError(f"{provider}: {type(exc).__name__}: {exc}", provider=provider, retryable=False)
 
 
+def retry_delay(exc: Exception, attempt: int) -> float:
+    """Honour ``Retry-After`` when the provider sends it, otherwise back off."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    raw = None
+    if headers is not None:
+        try:
+            raw = headers.get("retry-after") or headers.get("Retry-After")
+        except Exception:  # noqa: BLE001 - exotic header containers
+            raw = None
+    if raw:
+        try:
+            return max(0.0, min(float(raw), 30.0))
+        except (TypeError, ValueError):
+            pass
+    return round(0.8 * (attempt + 1), 2)
+
+
 def build_user_content(message: ChatMessage) -> Any:
     if not message.images:
         return message.content or ""
@@ -198,7 +216,7 @@ class OpenAIProvider(LLMProvider):
         if tool_payload:
             payload["tools"] = tool_payload
             payload["tool_choice"] = "auto"
-        if self._supports_stream_options:
+        if self._supports_stream_options and settings.llm_stream_options:
             payload["stream_options"] = {"include_usage": True}
 
         attempts = max(1, settings.llm_max_retries + 1)
@@ -216,7 +234,7 @@ class OpenAIProvider(LLMProvider):
                         attempt + 1,
                         attempts - 1,
                     )
-                    await asyncio.sleep(0.8 * (attempt + 1))
+                    await asyncio.sleep(retry_delay(exc, attempt))
                     continue
                 raise error from exc
 
@@ -261,7 +279,7 @@ class OpenAIProvider(LLMProvider):
                 error = map_openai_error(exc, self.name)
                 if not emitted and attempt + 1 < attempts and error.retryable:
                     logger.warning("%s: stream failed before first token (%s), retrying", self.name, error.message)
-                    await asyncio.sleep(0.8 * (attempt + 1))
+                    await asyncio.sleep(retry_delay(exc, attempt))
                     continue
                 raise error from exc
             finally:
@@ -272,15 +290,18 @@ class OpenAIProvider(LLMProvider):
                     except Exception:  # pragma: no cover - closing best effort
                         pass
 
-            tool_calls = [
-                ToolCall(
-                    id=slot["id"] or f"call_{index}",
-                    name=slot["name"] or "unknown",
-                    arguments=parse_tool_arguments(slot["arguments"]),
-                    raw_arguments=slot["arguments"],
+            tool_calls = []
+            for index, slot in sorted(slots.items(), key=lambda item: item[0]):
+                arguments, parse_error = parse_tool_arguments(slot["arguments"])
+                tool_calls.append(
+                    ToolCall(
+                        id=slot["id"] or f"call_{index}",
+                        name=slot["name"] or "unknown",
+                        arguments=arguments,
+                        raw_arguments=slot["arguments"],
+                        parse_error=parse_error,
+                    )
                 )
-                for index, slot in sorted(slots.items(), key=lambda item: item[0])
-            ]
             for call in tool_calls:
                 yield ToolCallEvent(call=call)
             yield StreamEnd(

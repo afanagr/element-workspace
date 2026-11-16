@@ -44,7 +44,7 @@ from app.services.parsing import (
     parse_document,
     view_kind,
 )
-from app.services.storage import decode_bytes, storage
+from app.services.storage import StorageError, decode_bytes, storage
 from app.services.vectorstore import vector_store
 
 logger = get_logger(__name__)
@@ -117,12 +117,8 @@ async def upload_files(
 
     for index, upload in enumerate(files):
         display = upload.filename or f"file-{index}"
+        storage_key: str | None = None
         try:
-            raw = await upload.read()
-            if len(raw) > max_bytes:
-                raise node_service.NodeError(
-                    f"File exceeds {settings.max_upload_mb} MB limit", status_code=413
-                )
             relative = (paths[index] if paths and index < len(paths) else "") or display
             parts = [
                 node_service.sanitize_name(part)
@@ -131,7 +127,11 @@ async def upload_files(
             ]
             if not parts:
                 raise node_service.NodeError("Invalid upload path")
-            filename = node_service.validate_upload(parts[-1], raw)
+            # Stream to disk first: a 200 MB upload never lives in RAM.
+            storage_key, size, sha256 = await storage.save_stream(upload.file, max_bytes)
+            filename = node_service.validate_upload(
+                parts[-1], await storage.read_head(storage_key), size=size
+            )
             current = parent
             for folder_name in parts[:-1]:
                 existing = await node_service.find_child(db, current.id, folder_name)
@@ -141,14 +141,17 @@ async def upload_files(
                     current = await node_service.create_folder(
                         db, current.id, folder_name, created_by=author
                     )
-            node, replaced = await node_service.create_file(
+            node, replaced = await node_service.create_file_from_storage(
                 db,
                 current.id,
                 filename,
-                raw,
+                storage_key,
+                size,
+                sha256,
                 created_by=author,
                 note="uploaded from browser",
             )
+            storage_key = None  # the node owns the blob from here on
             to_index.append(node.id)
             items.append(
                 UploadItem(
@@ -157,10 +160,14 @@ async def upload_files(
             )
         except node_service.NodeError as exc:
             errors.append(f"{display}: {exc.message}")
+        except StorageError as exc:
+            errors.append(f"{display}: {exc}")
         except Exception as exc:  # noqa: BLE001
             logger.exception("Upload failed for %s", display)
             errors.append(f"{display}: {type(exc).__name__}: {exc}")
         finally:
+            if storage_key:
+                storage.delete(storage_key)
             await upload.close()
 
     await db.commit()

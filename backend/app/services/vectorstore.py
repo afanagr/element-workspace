@@ -29,6 +29,7 @@ class VectorStore:
         self._client: AsyncQdrantClient | None = None
         self._dimension: int | None = None
         self._lock = asyncio.Lock()
+        self._indexes_ready = False
 
     @property
     def collection(self) -> str:
@@ -78,7 +79,23 @@ class VectorStore:
                         size=dimension, distance=models.Distance.COSINE
                     ),
                 )
+            if not self._indexes_ready:
+                await self._ensure_indexes(client)
+                self._indexes_ready = True
             self._dimension = dimension
+
+    async def _ensure_indexes(self, client: AsyncQdrantClient) -> None:
+        """Payload indexes keep project/node filters fast on large collections."""
+        for field in ("project_id", "node_id"):
+            try:
+                await client.create_payload_index(
+                    collection_name=self.collection,
+                    field_name=field,
+                    field_schema=models.PayloadSchemaType.KEYWORD,
+                    wait=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - index creation is best effort
+                logger.debug("Could not create payload index %s: %s", field, exc)
 
     async def delete_node(self, node_id: str) -> None:
         client = self.client()
@@ -114,7 +131,7 @@ class VectorStore:
             return 0
         await self.ensure_collection(len(vectors[0]))
         points: list[models.PointStruct] = []
-        for chunk, vector in zip(chunks, vectors):
+        for chunk, vector in zip(chunks, vectors, strict=True):
             points.append(
                 models.PointStruct(
                     id=point_id(node_id, chunk.index),
@@ -144,6 +161,7 @@ class VectorStore:
         limit: int = 6,
         project_id: str | None = None,
         node_ids: Sequence[str] | None = None,
+        score_threshold: float | None = None,
     ) -> list[dict[str, Any]]:
         client = self.client()
         if not await client.collection_exists(self.collection):
@@ -166,6 +184,7 @@ class VectorStore:
                 query=[float(value) for value in vector],
                 query_filter=query_filter,
                 limit=limit,
+                score_threshold=score_threshold,
                 with_payload=True,
             )
         except Exception as exc:  # noqa: BLE001

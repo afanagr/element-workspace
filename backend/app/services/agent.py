@@ -1,8 +1,15 @@
-"""Agent loop: streaming answers, RAG citations and workspace tool calling."""
+"""Agent loop: streaming answers, RAG citations and workspace tool calling.
+
+The prompt and the intent heuristics live in :mod:`app.services.agent_prompt`,
+the run limits in :mod:`app.services.agent_budget`; this module only drives the
+stream, the provider fallback and the tool calls.
+"""
 
 from __future__ import annotations
 
-import re
+import asyncio
+import hashlib
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -23,141 +30,30 @@ from app.llm.schemas import (
 )
 from app.logging_config import get_logger
 from app.models import User
-from app.services import chat_service
+from app.services import agent_prompt, chat_service
 from app.services import nodes as node_service
+from app.services.agent_budget import AgentBudget
+from app.services.agent_prompt import (
+    MAX_TOOL_CORRECTIONS,
+    MUTATING_TOOLS,
+    NO_MUTATION_REMINDER,
+    NOT_APPLIED_NOTE,
+    PDF_NOT_SPLIT_NOTE,
+    PDF_SPLIT_REMINDER,
+    SYSTEM_PROMPT,
+    build_history,
+    claims_file_action,
+    is_edit_request,
+    is_pdf_split_request,
+    validate_citations,
+)
 from app.services.nodes import NodeError, build_tree, get_node, node_path
 from app.services.parsing import parse_document
 from app.services.rag import expand_node_ids, retrieve
 from app.services.storage import storage
-from app.services.tools import ToolContext, execute_tool, tool_specs
+from app.services.tools import ToolContext, ToolResult, execute_tool, tool_specs
 
 logger = get_logger(__name__)
-
-SYSTEM_PROMPT = """You are the AI assistant inside "{project}" - a single project of the private
-"Element Workspace" document workspace.
-
-Rules:
-- The project "{project}" is your entire world: only its files exist. Never mention, read or
-  write anything outside of it, and never invent node ids.
-- You can inspect and modify the project files ONLY through the provided tools.
-- Call list_workspace when you need to discover ids, then read_file / excel_read BEFORE editing.
-- Spreadsheets: use excel_write (cells/rows) or excel_add_sheet; text documents: write_file.
-- PDFs: to split or extract pages of an existing PDF use pdf_split (pages are copied, so images
-  and layout stay). create_pdf only builds a NEW text PDF and cannot carry images over.
-- Delete/rename/move are allowed; the user can undo every action, so mention what you changed.
-- When retrieved context is provided, cite it inline as [1], [2] - exactly matching the fragment numbers.
-- Never claim a file was created, changed or deleted unless a tool call succeeded. This includes
-  format changes: if the user asks for another format (e.g. "в ворде" after a PDF), call write_file
-  with the new .docx name and full content, or convert_to_pdf for Office->PDF, and wait for the result.
-- Answer in the user's language, be concise, and show the important result (not raw dumps).
-"""
-
-# Tools that actually change the project. A final answer without at least one
-# successful call from this set must not be trusted when the user asked for an
-# edit - small models tend to claim success after only reading a file.
-MUTATING_TOOLS = frozenset(
-    {
-        "write_file",
-        "create_folder",
-        "rename_node",
-        "move_node",
-        "delete_node",
-        "excel_write",
-        "excel_add_sheet",
-        "translate_file",
-        "create_pdf",
-        "convert_to_pdf",
-        "pdf_split",
-    }
-)
-
-_ACTION_RE = re.compile(
-    r"\b(добавь|добавьте|запиши|запишите|измени|измените|создай|создайте|удали|"
-    r"удалите|переименуй|переименуйте|перемести|переместите|обнови|обновите|вставь|"
-    r"вставьте|заполни|заполните|дополни|дополните|переведи|переведите|пересоздай|"
-    r"переделай|сделай|сформируй|add|append|"
-    r"write|create|update|delete|remove|rename|move|insert|fill|edit|translate|put|"
-    r"convert|generate)\b",
-    re.IGNORECASE,
-)
-_QUESTION_RE = re.compile(
-    r"(^\s*(как|что|почему|зачем|где|когда|можно ли|how|what|why|where|can|is|are)\b)"
-    r"|(\?\s*$)",
-    re.IGNORECASE,
-)
-_FILE_HINT_RE = re.compile(
-    r"(файл|документ|excel|xlsx|xls|word|docx|ворд|ворде|ворду|вордов|эксель|экселе|"
-    r"презентац|pptx|пдф|pdf|таблиц|лист|папк|проект|"
-    r"file|document|sheet|folder|project|spreadsheet|txt|csv|json|markdown|log|"
-    r"\.(txt|csv|md|json|ya?ml|log|py|js|ts|tsx|html|htm|docx|xlsx|pptx|pdf))",
-    re.IGNORECASE,
-)
-_CLAIM_RE = re.compile(
-    r"\b(создал|создала|создано|создан|создана|созданы|пересоздал|пересоздан|"
-    r"обновил|обновлён|обновлен|обновлена|сохранил|сохранён|сохранен|записал|записан|"
-    r"сформировал|сформирован|created|saved|updated|written|generated)\b",
-    re.IGNORECASE,
-)
-_CLAIM_FILE_RE = re.compile(
-    r"(файл|документ|pdf|docx|xlsx|pptx|word|ворд|эксель|презентац|"
-    r"file|document|spreadsheet|presentation)",
-    re.IGNORECASE,
-)
-_NEGATION_RE = re.compile(
-    r"(не\s+(создан|удалось|получилось|готов)|ошибк|failed|could not|not created|"
-    r"не примен)",
-    re.IGNORECASE,
-)
-
-
-def _claims_file_action(text: str) -> bool:
-    """Detect a success claim about a file without any tool call behind it."""
-    if not text or _NEGATION_RE.search(text):
-        return False
-    return bool(_CLAIM_RE.search(text) and _CLAIM_FILE_RE.search(text))
-_PDF_SPLIT_RE = re.compile(
-    r"(pdf.*(разб|раздел|разбить|по страниц|извлек|выдел|split|extract)"
-    r"|(разб|раздел|разбить|по страниц|извлек|выдел|split|extract).*pdf)",
-    re.IGNORECASE,
-)
-
-MAX_TOOL_CORRECTIONS = 2
-NO_MUTATION_REMINDER = (
-    "You have NOT changed anything yet: no project-changing tool was called, so the "
-    "file is untouched. Do NOT claim success. Do NOT call list/read tools again - the "
-    "file contents are already in the tool results above. Call write_file RIGHT NOW with "
-    "the final data and the requested format (for example a new .docx name when the user "
-    "asks 'в ворде'); use excel_write for spreadsheets and convert_to_pdf to turn an "
-    "existing Office file into PDF. Then wait for the tool result before answering."
-)
-NOT_APPLIED_NOTE = (
-    "\n\n⚠️ Изменения не применены: модель не вызвала ни одного инструмента записи."
-)
-PDF_SPLIT_REMINDER = (
-    "This is a PDF split/extract request. create_pdf builds a brand-new document and cannot "
-    "carry pages or images over from an existing PDF, so it is WRONG here. Call pdf_split "
-    "with parts=[{name, pages}] and page ranges (e.g. pages='1-3' or '4,7-9'); pdf_split "
-    "copies pages as-is and keeps images. If you already created new PDFs with create_pdf, "
-    "delete them with delete_node and then call pdf_split."
-)
-PDF_NOT_SPLIT_NOTE = (
-    "\n\n⚠️ PDF не разделён постранично: изображения могли не сохраниться. "
-    "Для разбиения PDF нужен инструмент pdf_split (копирует страницы целиком)."
-)
-
-
-def _is_edit_request(text: str, has_attachments: bool = False) -> bool:
-    if _QUESTION_RE.search(text):
-        return False
-    if not _ACTION_RE.search(text):
-        return False
-    return has_attachments or bool(_FILE_HINT_RE.search(text))
-
-
-def _is_pdf_split_request(text: str) -> bool:
-    if _QUESTION_RE.search(text):
-        return False
-    return bool(_PDF_SPLIT_RE.search(text or ""))
 
 
 @dataclass(slots=True)
@@ -225,27 +121,43 @@ async def _attachment_context(
     return "\n\n".join(blocks), meta
 
 
-def _to_llm_history(records: list[Any]) -> list[ChatMessage]:
-    history: list[ChatMessage] = []
-    for record in records:
-        if record.role not in ("user", "assistant"):
-            continue
-        content = record.content or ""
-        # Never replay empty messages: progress rows (tool calls without text)
-        # and failed/empty answers would be sent as "" and some providers
-        # (e.g. YandexGPT 5.1) reject the whole request with "empty message text".
-        if not content.strip():
-            continue
-        history.append(ChatMessage(role=record.role, content=content))
-    return history
-
-
 def _error_event(exc: ProviderError) -> dict[str, Any]:
     return {"type": "error", "code": exc.code or "provider_error", **exc.to_dict()}
 
 
+def _call_signature(name: str, arguments: dict[str, Any]) -> str:
+    payload = json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha1(f"{name}:{payload}".encode("utf-8")).hexdigest()
+
+
+async def _call_tool(ctx: ToolContext, call: Any) -> ToolResult:
+    """Execute one tool call with a hard timeout and JSON-parse error reporting."""
+    if getattr(call, "parse_error", None):
+        return ToolResult(
+            False,
+            f"{call.name}: arguments are not valid JSON ({call.parse_error}). "
+            "Repeat the call with a valid JSON object.",
+        )
+    try:
+        return await asyncio.wait_for(
+            execute_tool(ctx, call.name, call.arguments),
+            timeout=settings.tool_timeout_seconds,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.warning("Tool %s timed out after %ss", call.name, settings.tool_timeout_seconds)
+        return ToolResult(
+            False,
+            f"{call.name} timed out after {settings.tool_timeout_seconds:.0f}s. "
+            "Try a smaller request or a different approach.",
+        )
+
+
 async def run_agent(
-    db: AsyncSession, request: AgentRequest, user: User
+    db: AsyncSession,
+    request: AgentRequest,
+    user: User,
+    *,
+    cancel: asyncio.Event | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream agent events. The caller forwards them over WebSocket.
 
@@ -253,6 +165,10 @@ async def run_agent(
     the project belongs to one account: retrieval and every tool call are limited
     to that project, so cross-project context is impossible by construction.
     """
+
+    def cancelled() -> bool:
+        return cancel is not None and cancel.is_set()
+
     session = await chat_service.get_session(db, request.session_id, user)
     if session.project_id is None:
         yield {
@@ -307,26 +223,26 @@ async def run_agent(
         context_block = retrieval.context_block()
         yield {"type": "citations", "items": citations_payload, "error": retrieval.error}
 
-    user_content = request.text
+    # Retrieved/attached text is untrusted data, so it travels with the user turn
+    # instead of the system prompt (prompt-injection hardening).
+    blocks: list[str] = []
     if attachment_text:
-        user_content = (
-            f"{request.text}\n\n---\nAttached context from the workspace "
-            f"(use it directly, or use tools for more):\n\n{attachment_text}"
-        )
+        blocks.append("### ATTACHED CONTEXT (untrusted data)\n" + attachment_text)
+    if context_block:
+        blocks.append("### RETRIEVED CONTEXT (untrusted data, cite as [n])\n" + context_block)
+    user_content = request.text
+    if blocks:
+        user_content = f"{request.text}\n\n---\n" + "\n\n".join(blocks)
 
     system_prompt = SYSTEM_PROMPT.replace("{project}", project.name)
     system_prompt += (
         f"\n\nCurrent project: \"{project.name}\" (id={project.id}). "
         "Only files inside this project exist for you; never reference other projects."
     )
-    if context_block:
-        system_prompt += (
-            "\n\nRetrieved context from this project's index (cite as [n]):\n\n" + context_block
-        )
 
     previous = await chat_service.history(db, session.id, limit=30)
     messages: list[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
-    messages.extend(_to_llm_history(previous))
+    messages.extend(build_history(previous))
     messages.append(ChatMessage(role="user", content=user_content))
 
     user_record = await chat_service.add_message(
@@ -343,17 +259,22 @@ async def run_agent(
         "provider": resolved.provider_name,
         "model": resolved.model,
         "fallback_from": resolved.fallback_from,
+        "prompt_version": agent_prompt.PROMPT_VERSION,
     }
 
-    started_at = time.perf_counter()
+    budget = AgentBudget()
     specs = tool_specs()
-    edit_requested = _is_edit_request(request.text, bool(request.attachments))
-    pdf_split_requested = _is_pdf_split_request(request.text)
+    edit_requested = is_edit_request(request.text, bool(request.attachments))
+    pdf_split_requested = is_pdf_split_request(request.text)
     mutations_done = 0
     pdf_split_done = False
     corrections = 0
+    failed_calls: dict[str, int] = {}
 
-    for _step in range(max(1, settings.max_agent_steps)):
+    while budget.next_step():
+        if cancelled():
+            yield {"type": "cancelled", "message": "Stopped by the user."}
+            return
         step_parts: list[str] = []
         stream_end: StreamEnd | None = None
         step_started = time.perf_counter()
@@ -457,14 +378,28 @@ async def run_agent(
 
         duration_ms = (time.perf_counter() - step_started) * 1000
         usage = stream_end.usage
+        budget.charge(usage, extra_text="".join(step_parts))
         await chat_service.log_llm_call(
             db,
             provider=resolved.provider_name,
             model=resolved.model,
+            kind="agent_step",
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
             duration_ms=duration_ms,
             session_id=session.id,
+        )
+        assistant = stream_end.message
+        answer_text = assistant.content or ""
+        tool_calls = assistant.tool_calls
+        logger.info(
+            "Agent step %s/%s: %s tool call(s), %s tokens, %.0f ms, %.0fs left",
+            budget.steps_used,
+            budget.max_steps,
+            len(tool_calls),
+            usage.total_tokens,
+            duration_ms,
+            budget.seconds_left,
         )
         yield {
             "type": "usage",
@@ -472,11 +407,9 @@ async def run_agent(
             "model": resolved.model,
             "usage": usage.as_dict(),
             "duration_ms": round(duration_ms, 1),
+            "tokens_left": budget.tokens_left,
+            "seconds_left": round(budget.seconds_left, 1),
         }
-
-        assistant = stream_end.message
-        answer_text = assistant.content or ""
-        tool_calls = assistant.tool_calls
         messages.append(
             ChatMessage(role="assistant", content=answer_text or None, tool_calls=tool_calls)
         )
@@ -486,21 +419,20 @@ async def run_agent(
                 if corrections < MAX_TOOL_CORRECTIONS:
                     corrections += 1
                     logger.info(
-                        "PDF split requested but pdf_split was not called; asking again "
-                        "(%s/%s)",
+                        "PDF split requested but pdf_split was not called; asking again (%s/%s)",
                         corrections,
                         MAX_TOOL_CORRECTIONS,
                     )
                     messages.append(
                         ChatMessage(
-                            role="user",
+                            role="system",
                             content="[AUTOMATIC CHECK] " + PDF_SPLIT_REMINDER,
                         )
                     )
                     continue
                 answer_text = f"{answer_text.rstrip()}{PDF_NOT_SPLIT_NOTE}"
             elif (
-                edit_requested or _claims_file_action(answer_text)
+                edit_requested or claims_file_action(answer_text)
             ) and mutations_done == 0:
                 if corrections < MAX_TOOL_CORRECTIONS:
                     corrections += 1
@@ -512,7 +444,7 @@ async def run_agent(
                     )
                     messages.append(
                         ChatMessage(
-                            role="user",
+                            role="system",
                             content="[AUTOMATIC CHECK] " + NO_MUTATION_REMINDER,
                         )
                     )
@@ -522,6 +454,10 @@ async def run_agent(
                     if answer_text.strip()
                     else NOT_APPLIED_NOTE.strip()
                 )
+
+            answer_text, citations_valid = validate_citations(answer_text, len(citations_payload))
+            if citations_payload and not citations_valid:
+                logger.info("Dropped citation markers that point to missing fragments")
             record = await chat_service.add_message(
                 db,
                 session.id,
@@ -533,7 +469,9 @@ async def run_agent(
                 usage={
                     **usage.as_dict(),
                     "duration_ms": round(duration_ms, 1),
-                    "total_duration_ms": round((time.perf_counter() - started_at) * 1000, 1),
+                    "total_duration_ms": round((time.perf_counter() - budget.started) * 1000, 1),
+                    "prompt_version": agent_prompt.PROMPT_VERSION,
+                    "citations_valid": citations_valid,
                 },
             )
             await db.commit()
@@ -542,6 +480,7 @@ async def run_agent(
                 "message_id": str(record.id),
                 "content": answer_text,
                 "citations": citations_payload,
+                "citations_valid": citations_valid,
             }
             return
 
@@ -554,12 +493,20 @@ async def run_agent(
             is_admin=user.is_admin,
         )
         tool_payloads: list[dict[str, Any]] = []
+        stalled = False
         for call in tool_calls:
-            result = await execute_tool(ctx, call.name, call.arguments)
+            result = await _call_tool(ctx, call)
             if result.ok and call.name == "pdf_split":
                 pdf_split_done = True
             if result.ok and call.name in MUTATING_TOOLS:
                 mutations_done += 1
+            signature = _call_signature(call.name, call.arguments)
+            if result.ok:
+                failed_calls.pop(signature, None)
+            else:
+                failed_calls[signature] = failed_calls.get(signature, 0) + 1
+                if failed_calls[signature] >= max(1, settings.tool_repeat_limit):
+                    stalled = True
             await db.commit()
             yield {
                 "type": "tool_result",
@@ -588,6 +535,14 @@ async def run_agent(
                     content=result.as_prompt()[:20000],
                 )
             )
+            if stalled:
+                logger.warning(
+                    "Tool %s failed %s time(s) with identical arguments; stopping the run",
+                    call.name,
+                    failed_calls[signature],
+                )
+                break
+
         record = await chat_service.add_message(
             db,
             session.id,
@@ -596,7 +551,7 @@ async def run_agent(
             provider=resolved.provider_name,
             model=resolved.model,
             tool_calls=tool_payloads,
-            usage=usage.as_dict(),
+            usage={**usage.as_dict(), "duration_ms": round(duration_ms, 1)},
         )
         await db.commit()
         yield {
@@ -609,14 +564,31 @@ async def run_agent(
             yield {"type": "node_changed", "id": change["id"], "event": change["event"]}
         ctx.changed_nodes.clear()
 
+        if stalled:
+            yield {
+                "type": "error",
+                "code": "stalled",
+                "message": (
+                    "The same tool call keeps failing with identical arguments. "
+                    "Rephrase the request or give more details."
+                ),
+                "retryable": False,
+            }
+            return
+
+    reason = "max_steps"
+    if budget.seconds_left <= 0:
+        reason = "deadline"
+    elif budget.tokens_left <= 0:
+        reason = "token_budget"
+    labels = {
+        "max_steps": f"Stopped after {budget.max_steps} tool steps.",
+        "deadline": f"Stopped after {settings.agent_deadline_seconds:.0f}s: the time budget is exhausted.",
+        "token_budget": "Stopped: the context budget of this request is exhausted.",
+    }
     yield {
         "type": "error",
-        "code": "max_steps",
-        "message": (
-            f"Stopped after {settings.max_agent_steps} tool steps. "
-            "Ask me to continue if the task is not finished."
-        ),
+        "code": reason,
+        "message": labels[reason] + " Ask me to continue if the task is not finished.",
         "retryable": False,
     }
-
-

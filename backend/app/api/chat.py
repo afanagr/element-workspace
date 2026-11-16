@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -208,6 +209,52 @@ async def send_message(
     )
 
 
+async def _stream_agent(
+    websocket: WebSocket,
+    db: AsyncSession,
+    request: AgentRequest,
+    user: User,
+) -> None:
+    """Stream one agent run and abort it on ``{"type":"cancel"}``.
+
+    Cancellation is cooperative: the agent checks the flag between steps, so an
+    in-flight provider call finishes before the run stops.
+    """
+    cancel = asyncio.Event()
+
+    async def pump() -> None:
+        async for event in run_agent(db, request, user, cancel=cancel):
+            await websocket.send_json(event)
+
+    runner = asyncio.create_task(pump())
+    try:
+        while not runner.done():
+            receiver = asyncio.create_task(websocket.receive_text())
+            done, _pending = await asyncio.wait(
+                {runner, receiver}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if receiver not in done:
+                receiver.cancel()
+                break
+            raw = receiver.result()
+            try:
+                frame = json.loads(raw)
+            except json.JSONDecodeError:
+                frame = {}
+            if (frame.get("type") or "") != "cancel":
+                continue
+            logger.info("Agent run cancelled by the client")
+            cancel.set()
+            try:
+                await asyncio.wait_for(runner, timeout=10)
+            except Exception:  # noqa: BLE001 - the stream reports its own errors
+                runner.cancel()
+            break
+    finally:
+        if not runner.done():
+            runner.cancel()
+
+
 @router.websocket("/ws/chat/{session_id}")
 async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
     token = (
@@ -273,8 +320,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                         await websocket.close(code=4401)
                         return
                     await chat_service.get_session(db, identifier, current)
-                    async for event in run_agent(db, request, current):
-                        await websocket.send_json(event)
+                    await _stream_agent(websocket, db, request, current)
             except WebSocketDisconnect:
                 raise
             except Exception as exc:  # noqa: BLE001

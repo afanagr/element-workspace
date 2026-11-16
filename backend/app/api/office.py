@@ -114,9 +114,16 @@ async def office_callback(
         return JSONResponse(status_code=403, content={"error": 1})
 
     status = int(body.get("status") or 0)
+    if status in (3, 7):
+        logger.warning(
+            "OnlyOffice could not save the document (status=%s, key=%s)",
+            status,
+            body.get("key"),
+        )
+        return JSONResponse(status_code=500, content={"error": 1})
     logger.info("OnlyOffice callback: status=%s key=%s", status, body.get("key"))
     if status not in (2, 6):
-        # 1 = editing, 4 = closed without changes, 3/7 = save errors.
+        # 1 = editing, 4 = closed without changes.
         return JSONResponse({"error": 0})
 
     url = str(body.get("url") or "")

@@ -25,6 +25,9 @@ class ToolCall:
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
     raw_arguments: str = ""
+    # Set when the provider sent arguments that are not valid JSON; the agent
+    # then asks the model to repeat the call instead of running it blind.
+    parse_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "arguments": self.arguments}
@@ -145,13 +148,16 @@ def is_retryable_status(status_code: int | None) -> bool:
     return status_code is None or status_code == 429 or status_code >= 500
 
 
-def parse_tool_arguments(raw: str | None) -> dict[str, Any]:
+def parse_tool_arguments(raw: str | None) -> tuple[dict[str, Any], str | None]:
+    """Parse tool-call arguments, reporting broken JSON instead of hiding it."""
     import json
 
     if not raw:
-        return {}
+        return {}, None
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError as exc:
+        return {}, f"{exc.msg} at position {exc.pos}"
+    if not isinstance(parsed, dict):
+        return {}, "arguments must be a JSON object"
+    return parsed, None

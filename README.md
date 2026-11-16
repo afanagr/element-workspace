@@ -126,11 +126,14 @@ The same converter powers `POST /api/nodes/{id}/convert/pdf` and the agent's
 Document Server is unavailable, PDF generation falls back to the built-in reportlab renderer.
 
 Set `ONLYOFFICE_ENABLED=false` in `.env` (or clear `ONLYOFFICE_URL`/`ONLYOFFICE_JWT_SECRET`) and
-restart the backend to fall back to the built-in viewers without touching the database. The complete
-pre-OnlyOffice state is also preserved in the git tag `pre-onlyoffice`.
+restart the backend to disable the editor: office files then fall back to the read-only text preview
+(the rest of the workspace is unaffected). The complete pre-OnlyOffice state is also preserved in the
+git tag `pre-onlyoffice`.
 
 The Community Edition is licensed under AGPLv3 and is limited to ~20 simultaneous connections; the
-container is capped at 2 GB RAM in `docker-compose.yml`.
+container is capped at 3 GB RAM in `docker-compose.yml`, so the host needs roughly 4 GB of free
+memory for the whole stack. `GET /api/health` reports the Document Server under
+`checks.documentserver`.
 
 ### Roles
 
@@ -158,6 +161,8 @@ Chat endpoints expose no embeddings API here, so vectors are always produced **l
 | `make logs` | tail logs from all containers |
 | `make down` | stop the stack, keep volumes |
 | `make reset` | stop and delete **all** volumes (workspace, DB, vectors) |
+| `make test` | run the backend unit tests (`pip install -r backend/requirements-dev.txt` once) |
+| `make lint` | `ruff check backend` (config in `ruff.toml`) |
 | `make backend-shell` / `make worker-shell` / `make psql` | debug shells |
 
 ### Interface language and layout

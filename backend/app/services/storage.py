@@ -8,6 +8,7 @@ rename/move nodes without rewriting blobs.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import re
 import uuid
@@ -48,7 +49,19 @@ class Storage:
             raise StorageError("File content is missing from storage")
         return await anyio.to_thread.run_sync(path.read_bytes)
 
-    def open_path(self, key: str) -> Path:
+    async def read_head(self, key: str, size: int = 8192) -> bytes:
+        """First ``size`` bytes of a stored file (magic/text detection)."""
+        path = self.path_for(key)
+        if not path.exists():
+            raise StorageError("File content is missing from storage")
+
+        def _read() -> bytes:
+            with open(path, "rb") as handle:
+                return handle.read(size)
+
+        return await anyio.to_thread.run_sync(_read)
+
+    async def open_path(self, key: str) -> Path:
         path = self.path_for(key)
         if not path.exists():
             raise StorageError("File content is missing from storage")
@@ -71,6 +84,49 @@ class Storage:
 
         await anyio.to_thread.run_sync(_write)
         return key, len(data), digest
+
+    async def save_stream(self, source, max_bytes: int) -> tuple[str, int, str]:
+        """Write an uploaded stream to disk while enforcing a size limit.
+
+        ``source`` may be an async reader (``await upload.read(n)``) or a plain
+        file object (Starlette's ``UploadFile.file``); the latter is read in a
+        worker thread so the event loop never blocks on disk I/O.
+        """
+        reader = getattr(source, "read", None)
+        if reader is None:
+            raise StorageError("Upload stream is not readable")
+        async_read = inspect.iscoroutinefunction(reader)
+        key = uuid.uuid4().hex
+        target = self.path_for(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
+        size = 0
+        chunk_size = 1024 * 1024
+        tmp = target.with_suffix(".part")
+        try:
+            with open(tmp, "wb") as handle:
+                while True:
+                    chunk = (
+                        await reader(chunk_size)
+                        if async_read
+                        else await anyio.to_thread.run_sync(reader, chunk_size)
+                    )
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise StorageError(
+                            f"File exceeds the {settings.max_upload_mb} MB upload limit"
+                        )
+                    digest.update(chunk)
+                    handle.write(chunk)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, target)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        return key, size, digest.hexdigest()
 
     def delete(self, key: str | None) -> None:
         if not key:

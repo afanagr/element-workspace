@@ -44,7 +44,17 @@ class Settings(BaseSettings):
     # administrator in /admin -> Users (see ``app.llm.factory``).
     llm_request_timeout: float = 180.0
     llm_max_retries: int = 2
+    # Some gateways reject the unknown ``stream_options`` field: turn it off there.
+    llm_stream_options: bool = True
     max_agent_steps: int = 8
+    # Hard limits of one agent run: wall clock and estimated context size.
+    agent_deadline_seconds: float = 300.0
+    agent_token_budget: int = 48_000
+    agent_history_tokens: int = 12_000
+    # Per-tool timeout: one slow conversion must not hold the stream forever.
+    tool_timeout_seconds: float = 150.0
+    # Stop the loop when the same failing call repeats this many times.
+    tool_repeat_limit: int = 2
 
     # ---------------------------------------------------------- embeddings
     # Vectors are always computed locally: the chat endpoints we talk to expose
@@ -56,6 +66,10 @@ class Settings(BaseSettings):
     chunk_size: int = 1200
     chunk_overlap: int = 200
     rag_top_k: int = 6
+    # Fragments below this cosine score are dropped (0 disables the filter).
+    rag_score_threshold: float = 0.2
+    # Keep at most N fragments of one document so a single file cannot fill the context.
+    rag_max_per_document: int = 2
 
     # -------------------------------------------------------------- limits
     max_upload_mb: int = 200
@@ -98,7 +112,9 @@ class Settings(BaseSettings):
     onlyoffice_lang: str = "ru"
     onlyoffice_allowed_hosts: str = "documentserver,localhost,127.0.0.1"
     onlyoffice_download_ttl: int = 900
-    onlyoffice_callback_ttl: int = 86_400
+    # Long enough for an editor left open for days; the token is HMAC-signed and
+    # bound to one node and one user.
+    onlyoffice_callback_ttl: int = 7 * 86_400
 
     @property
     def office_configured(self) -> bool:

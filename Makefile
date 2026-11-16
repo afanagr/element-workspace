@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 COMPOSE := docker compose
 
-.PHONY: help up down restart logs ps build reset backend-shell worker-shell psql
+.PHONY: help up down restart logs ps build reset backend-shell worker-shell psql test lint
 
 help:
 	@echo "Element Workspace"
@@ -11,6 +11,8 @@ help:
 	@echo "  make reset       Stop and remove ALL data (postgres, qdrant, workspace)"
 	@echo "  make build       Rebuild images"
 	@echo "  make ps          Show container status"
+	@echo "  make test        Run the backend unit tests (pip install -r backend/requirements-dev.txt)"
+	@echo "  make lint        Run ruff on the backend"
 	@echo "  make backend-shell / worker-shell / psql   Debug shells"
 
 up:
@@ -45,3 +47,9 @@ worker-shell:
 
 psql:
 	$(COMPOSE) exec postgres psql -U workspace -d workspace
+
+test:
+	cd backend && python -m pytest
+
+lint:
+	python -m ruff check backend

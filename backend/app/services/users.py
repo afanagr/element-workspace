@@ -102,6 +102,7 @@ def _clean_connection(item: dict[str, Any]) -> dict[str, Any]:
         "model": model,
         "api_key": api_key,
         "clear_key": bool(item.get("clear_key")),
+        "supports_tools": True if item.get("supports_tools") is None else bool(item.get("supports_tools")),
     }
 
 
@@ -166,13 +167,14 @@ async def sync_connections(
                     base_url=item["base_url"],
                     model=item["model"],
                     api_key_enc=encrypt_secret(item["api_key"]) if item["api_key"] else None,
-                    supports_tools=True,
+                    supports_tools=item["supports_tools"],
                 )
             )
             continue
         row.name = item["name"]
         row.base_url = item["base_url"]
         row.model = item["model"]
+        row.supports_tools = item["supports_tools"]
         if item["clear_key"]:
             row.api_key_enc = None
         elif item["api_key"]:

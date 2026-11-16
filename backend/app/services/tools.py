@@ -20,14 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.logging_config import get_logger
 from app.llm.factory import registry
-from app.llm.schemas import ChatMessage, TextDelta, ToolSpec
+from app.llm.schemas import ChatMessage, ProviderError, TextDelta, ToolSpec
 from app.models import Node, Operation
 from app.services import nodes as node_service
 from app.services import office_convert
 from app.services.documents import build_pdf_parts, build_text_document, pdf_page_count
 from app.services.indexer import enqueue_index
 from app.services.parsing import parse_document
-from app.services.storage import storage
+from app.services.storage import decode_bytes, storage
 from app.services.vectorstore import vector_store
 
 logger = get_logger(__name__)
@@ -95,13 +95,34 @@ TOOL_SPECS: list[ToolSpec] = [
         ),
     ),
     ToolSpec(
+        name="find_nodes",
+        description=(
+            "Search files and folders of the current project by name (case-insensitive "
+            "substring). Returns ids and paths - use it instead of guessing node ids."
+        ),
+        parameters=_obj(
+            {
+                "query": {"type": "string", "description": "Part of the file or folder name"},
+                "limit": {"type": "integer", "description": "Max results, default 30"},
+            },
+            ["query"],
+        ),
+    ),
+    ToolSpec(
         name="read_file",
-        description="Read the extracted text of a file (Excel cells, Word/PDF text, OCR text, code).",
+        description=(
+            "Read the extracted text of a file (Excel cells, Word/PDF text, OCR text, code). "
+            "Use offset to page through long documents."
+        ),
         parameters=_obj(
             {
                 "node_id": {"type": "string", "description": "File node id"},
                 "max_chars": {"type": "integer", "description": "Truncate output, default 40000"},
                 "sheet": {"type": "string", "description": "For .xlsx: read only this sheet"},
+                "offset": {
+                    "type": "integer",
+                    "description": "Start character (use next_offset of the previous read)",
+                },
             },
             ["node_id"],
         ),
@@ -122,6 +143,37 @@ TOOL_SPECS: list[ToolSpec] = [
                 "content": {"type": "string", "description": "Full file content"},
             },
             ["parent_id", "name", "content"],
+        ),
+    ),
+    ToolSpec(
+        name="edit_file",
+        description=(
+            "Replace an exact text fragment inside an existing text file (txt, md, csv, json, "
+            "yaml, log, code). Prefer this over write_file for small changes - the rest of the "
+            "file stays byte-identical. Fails when old_text is not found."
+        ),
+        parameters=_obj(
+            {
+                "node_id": _STR,
+                "old_text": {"type": "string", "description": "Exact fragment to replace"},
+                "new_text": {"type": "string", "description": "Replacement (may be empty)"},
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence, default false (first only)",
+                },
+            },
+            ["node_id", "old_text", "new_text"],
+        ),
+    ),
+    ToolSpec(
+        name="append_file",
+        description="Append text to the end of an existing text file (adds a newline when needed).",
+        parameters=_obj(
+            {
+                "node_id": _STR,
+                "content": {"type": "string", "description": "Text to append"},
+            },
+            ["node_id", "content"],
         ),
     ),
     ToolSpec(
@@ -365,26 +417,73 @@ async def _read_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             raise ToolError(f"Sheet '{sheet}' not found. Available: {available}")
         segments = matching
     text = "\n\n".join(f"[{segment.label}]\n{segment.text}" for segment in segments) or parsed.text
-    limit = int(args.get("max_chars") or 40000)
-    truncated = len(text) > limit
+    limit = max(1000, int(args.get("max_chars") or 40000))
+    offset = max(0, int(args.get("offset") or 0))
+    total = len(text)
+    window = text[offset : offset + limit]
+    next_offset = offset + len(window) if offset + len(window) < total else None
+    truncated = next_offset is not None
     if truncated:
-        text = text[:limit] + "\n…[truncated]"
+        window += "\n…[truncated]"
     path = await node_service.node_path(ctx.db, node)
     pages = parsed.meta.get("pages") if isinstance(parsed.meta, dict) else None
     header = f"File: {path} ({node.size} bytes"
     if pages:
         header += f", {pages} pages"
+    if offset:
+        header += f", chars {offset}-{offset + len(window)} of {total}"
     header += ")\n"
-    summary = f"{header}{text}"
-    data: dict[str, Any] = {
+    summary = f"{header}{window}"
+    info: dict[str, Any] = {
         "node_id": str(node.id),
         "path": path,
-        "chars": len(text),
+        "chars": len(window),
+        "total_chars": total,
+        "offset": offset,
+        "next_offset": next_offset,
         "truncated": truncated,
     }
     if pages:
-        data["pages"] = pages
-    return ToolResult(True, summary, data)
+        info["pages"] = pages
+    return ToolResult(True, summary, info)
+
+
+async def _find_nodes(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Search the current project by name - the model never has to guess ids."""
+    query = str(args.get("query") or "").strip()
+    if not query:
+        raise ToolError("query is required")
+    if not ctx.project_id:
+        raise ToolError("This chat has no project scope")
+    limit = max(1, min(int(args.get("limit") or 30), 100))
+    pattern = f"%{query.lower()}%"
+    from sqlalchemy import func, select
+
+    result = await ctx.db.execute(
+        select(Node)
+        .where(
+            Node.project_id == uuid.UUID(str(ctx.project_id)),
+            func.lower(Node.name).like(pattern),
+        )
+        .order_by(Node.kind, Node.name)
+        .limit(limit)
+    )
+    nodes = list(result.scalars().all())
+    if not nodes:
+        return ToolResult(True, f"No files or folders matching '{query}'.", {"matches": []})
+    lines: list[str] = []
+    matches: list[dict[str, Any]] = []
+    for node in nodes:
+        path = await node_service.node_path(ctx.db, node)
+        lines.append(f"{node.kind}: {path} (id={node.id})")
+        matches.append(
+            {"id": str(node.id), "name": node.name, "kind": node.kind, "path": path}
+        )
+    return ToolResult(
+        True,
+        f"Matches for '{query}':\n" + "\n".join(lines),
+        {"matches": matches},
+    )
 
 
 async def _search_documents(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
@@ -443,6 +542,64 @@ async def _create_folder(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     )
 
 
+# ------------------------------------------------------------ verification
+def _verify_bytes(name: str, data: bytes) -> dict[str, Any]:
+    """Read the written bytes back and report what the file really contains."""
+    ext = node_service.extension_of(name)
+    info: dict[str, Any] = {"bytes": len(data), "ok": bool(data)}
+    if not data:
+        info["problem"] = "the file is empty"
+        return info
+    try:
+        if ext in (".xlsx", ".xlsm"):
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(io.BytesIO(data), read_only=True)
+            try:
+                info["sheets"] = list(workbook.sheetnames)
+                info["rows"] = sum(int(sheet.max_row or 0) for sheet in workbook.worksheets)
+            finally:
+                workbook.close()
+            info["ok"] = bool(info["sheets"]) and info["rows"] > 0
+        elif ext == ".pdf":
+            info["pages"] = pdf_page_count(data)
+            info["ok"] = info["pages"] > 0
+        elif ext == ".docx":
+            import docx
+
+            document = docx.Document(io.BytesIO(data))
+            info["paragraphs"] = len(document.paragraphs)
+            info["tables"] = len(document.tables)
+            info["ok"] = bool(info["paragraphs"] or info["tables"])
+        else:
+            text = decode_bytes(data)
+            info["lines"] = text.count("\n") + (1 if text else 0)
+            info["chars"] = len(text)
+            info["ok"] = bool(text.strip())
+    except Exception as exc:  # noqa: BLE001 - verification must never crash a tool
+        info["ok"] = False
+        info["problem"] = f"cannot read the result back: {exc}"
+        return info
+    if not info["ok"]:
+        info["problem"] = "the file looks empty"
+    return info
+
+
+def _verification_note(info: dict[str, Any]) -> str:
+    if "sheets" in info:
+        return f"Verified: {len(info['sheets'])} sheet(s), {info.get('rows', 0)} row(s)."
+    if "pages" in info:
+        return f"Verified: {info['pages']} page(s)."
+    if "paragraphs" in info:
+        return (
+            f"Verified: {info.get('paragraphs', 0)} paragraph(s), "
+            f"{info.get('tables', 0)} table(s)."
+        )
+    if "lines" in info:
+        return f"Verified: {info['lines']} line(s), {info.get('chars', 0)} char(s)."
+    return f"Verified: {info.get('bytes', 0)} byte(s)."
+
+
 async def _write_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     parent = await _resolve_node(ctx, args.get("parent_id"))
     raw_name = str(args.get("name") or "").strip()
@@ -480,10 +637,111 @@ async def _write_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     enqueue_index([node.id])
     ctx.changed_nodes.append({"id": str(node.id), "event": "updated" if replaced else "created"})
     path = await node_service.node_path(ctx.db, node)
+    verification = _verify_bytes(name, payload)
+    summary = f"{'Updated' if replaced else 'Created'} {path} ({len(payload)} bytes, id={node.id})."
+    if verification.get("ok"):
+        summary = f"{summary} {_verification_note(verification)}"
+    else:
+        summary = f"{summary} Verification failed: {verification.get('problem')}"
     return ToolResult(
-        True,
-        f"{'Updated' if replaced else 'Created'} {path} ({len(payload)} bytes, id={node.id}).",
-        {"node_id": str(node.id), "path": path, "bytes": len(payload), "replaced": replaced},
+        bool(verification.get("ok")),
+        summary,
+        {
+            "node_id": str(node.id),
+            "path": path,
+            "bytes": len(payload),
+            "replaced": replaced,
+            "verification": verification,
+        },
+        operation_id,
+    )
+
+
+async def _edit_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Replace an exact fragment - keeps the rest of the file byte-identical."""
+    node = await _resolve_node(ctx, args.get("node_id"))
+    if not node_service.is_text_editable(node):
+        raise ToolError(
+            "edit_file works with text files only; use write_file or excel_write for Office formats"
+        )
+    old_text = str(args.get("old_text") or "")
+    if not old_text:
+        raise ToolError("old_text is required")
+    new_text = "" if args.get("new_text") is None else str(args.get("new_text"))
+    replace_all = bool(args.get("replace_all"))
+    data = await storage.read_bytes(node.storage_key)
+    source = decode_bytes(data)
+    occurrences = source.count(old_text)
+    if not occurrences:
+        raise ToolError(
+            "old_text was not found in the file. Read the file again and copy the exact fragment."
+        )
+    undo = _version_undo(node)
+    updated = source.replace(old_text, new_text) if replace_all else source.replace(old_text, new_text, 1)
+    payload = updated.encode("utf-8")
+    await node_service.write_file(ctx.db, node, payload, created_by="ai", note="edited by AI")
+    replaced = occurrences if replace_all else 1
+    operation_id = await _record_operation(
+        ctx,
+        tool_name="edit_file",
+        description=f"Replaced {replaced} fragment(s) in {node.name}",
+        node_id=node.id,
+        undo=undo,
+    )
+    enqueue_index([node.id])
+    ctx.changed_nodes.append({"id": str(node.id), "event": "updated"})
+    verification = _verify_bytes(node.name, payload)
+    summary = f"Replaced {replaced} occurrence(s) in {node.name} ({len(payload)} bytes)."
+    if verification.get("ok"):
+        summary = f"{summary} {_verification_note(verification)}"
+    else:
+        summary = f"{summary} Verification failed: {verification.get('problem')}"
+    return ToolResult(
+        bool(verification.get("ok")),
+        summary,
+        {
+            "node_id": str(node.id),
+            "replaced": replaced,
+            "bytes": len(payload),
+            "verification": verification,
+        },
+        operation_id,
+    )
+
+
+async def _append_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Append text to an existing text file without rewriting the whole body."""
+    node = await _resolve_node(ctx, args.get("node_id"))
+    if not node_service.is_text_editable(node):
+        raise ToolError("append_file works with text files only")
+    content = "" if args.get("content") is None else str(args.get("content"))
+    if not content:
+        raise ToolError("content is required")
+    data = await storage.read_bytes(node.storage_key)
+    source = decode_bytes(data)
+    separator = "" if not source or source.endswith("\n") else "\n"
+    payload = f"{source}{separator}{content}".encode("utf-8")
+    undo = _version_undo(node)
+    await node_service.write_file(ctx.db, node, payload, created_by="ai", note="appended by AI")
+    operation_id = await _record_operation(
+        ctx,
+        tool_name="append_file",
+        description=f"Appended {len(content)} char(s) to {node.name}",
+        node_id=node.id,
+        undo=undo,
+    )
+    enqueue_index([node.id])
+    ctx.changed_nodes.append({"id": str(node.id), "event": "updated"})
+    verification = _verify_bytes(node.name, payload)
+    summary = f"Appended {len(content)} char(s) to {node.name} ({len(payload)} bytes)."
+    if verification.get("ok"):
+        summary = f"{summary} {_verification_note(verification)}"
+    else:
+        summary = f"{summary} Verification failed: {verification.get('problem')}"
+    return ToolResult(
+        bool(verification.get("ok")),
+        summary,
+        {"node_id": str(node.id), "bytes": len(payload), "verification": verification},
         operation_id,
     )
 
@@ -681,6 +939,34 @@ async def _excel_add_sheet(ctx: ToolContext, args: dict[str, Any]) -> ToolResult
 
 
 # ------------------------------------------------------- translate / pdf
+TRANSLATE_CHUNK_CHARS = 12_000
+
+
+def _translate_windows(text: str, size: int = TRANSLATE_CHUNK_CHARS) -> list[str]:
+    """Split text into paragraph-aligned windows so long files are fully translated."""
+    if len(text) <= size:
+        return [text]
+    windows: list[str] = []
+    buffer: list[str] = []
+    length = 0
+    for paragraph in text.split("\n\n"):
+        block = paragraph
+        while len(block) > size:
+            # One huge paragraph (log dump, single-line CSV): hard split.
+            windows.append(block[:size])
+            block = block[size:]
+        if length and length + len(block) + 2 > size:
+            windows.append("\n\n".join(buffer))
+            buffer = []
+            length = 0
+        if block:
+            buffer.append(block)
+            length += len(block) + 2
+    if buffer:
+        windows.append("\n\n".join(buffer))
+    return [window for window in windows if window.strip()] or [text]
+
+
 async def _translate_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     node = await _resolve_node(ctx, args.get("node_id"))
     if node.kind != "file" or not node.storage_key:
@@ -697,28 +983,45 @@ async def _translate_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     if not source:
         raise ToolError("This file contains no extractable text to translate")
 
+    windows = _translate_windows(source)
     resolved = await registry.resolve(ctx.db, ctx.user)
-    messages = [
-        ChatMessage(
-            role="system",
-            content=(
-                "You are a professional translator. Translate the document faithfully, "
-                "preserving structure, markdown, tables, numbers and proper names. "
-                "Return only the translated text without commentary."
+    translated_parts: list[str] = []
+    for index, window in enumerate(windows, start=1):
+        messages = [
+            ChatMessage(
+                role="system",
+                content=(
+                    "You are a professional translator. Translate the document faithfully, "
+                    "preserving structure, markdown, tables, numbers and proper names. "
+                    "Return only the translated text without commentary."
+                ),
             ),
-        ),
-        ChatMessage(
-            role="user",
-            content=f"Translate the following document into {language}:\n\n{source[:14000]}",
-        ),
-    ]
-    parts: list[str] = []
-    async for event in resolved.provider.chat_stream(
-        messages, model=resolved.model, temperature=0.1
-    ):
-        if isinstance(event, TextDelta):
-            parts.append(event.text)
-    translated = "".join(parts).strip()
+            ChatMessage(
+                role="user",
+                content=(
+                    f"Translate part {index}/{len(windows)} of the document into {language}:"
+                    f"\n\n{window}"
+                ),
+            ),
+        ]
+        pieces: list[str] = []
+        try:
+            async for event in resolved.provider.chat_stream(
+                messages, model=resolved.model, temperature=0.1
+            ):
+                if isinstance(event, TextDelta):
+                    pieces.append(event.text)
+        except ProviderError as exc:
+            raise ToolError(
+                f"Translation failed on part {index}/{len(windows)}: {exc.message}"
+            ) from exc
+        part = "".join(pieces).strip()
+        if not part:
+            raise ToolError(
+                f"The model returned an empty translation for part {index}/{len(windows)}"
+            )
+        translated_parts.append(part)
+    translated = "\n\n".join(translated_parts).strip()
     if not translated:
         raise ToolError("The model returned an empty translation")
 
@@ -752,7 +1055,8 @@ async def _translate_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     path = await node_service.node_path(ctx.db, created)
     return ToolResult(
         True,
-        f"Translated {node.name} into {language} using {resolved.provider_name}/{resolved.model}. "
+        f"Translated {node.name} into {language} using {resolved.provider_name}/{resolved.model} "
+        f"({len(source)} char(s) in {len(windows)} part(s) → {len(translated)} char(s)). "
         f"Saved as {path} (id={created.id}).",
         {
             "node_id": str(created.id),
@@ -760,6 +1064,8 @@ async def _translate_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             "provider": resolved.provider_name,
             "model": resolved.model,
             "chars": len(translated),
+            "source_chars": len(source),
+            "parts": len(windows),
         },
         operation_id,
     )
@@ -939,7 +1245,7 @@ async def _pdf_split(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         raise ToolError(f"Cannot split {node.name}: {exc}") from exc
 
     created: list[dict[str, Any]] = []
-    for (name, pages), (_, payload) in zip(plans, payloads):
+    for (name, pages), (_, payload) in zip(plans, payloads, strict=True):
         created_node, _ = await node_service.create_file(
             ctx.db, parent.id, name, payload, created_by="ai", note="pdf_split"
         )
@@ -980,8 +1286,11 @@ async def _pdf_split(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
 # ------------------------------------------------------------- dispatcher
 _HANDLERS = {
     "list_workspace": _list_workspace,
+    "find_nodes": _find_nodes,
     "read_file": _read_file,
     "write_file": _write_file,
+    "edit_file": _edit_file,
+    "append_file": _append_file,
     "create_folder": _create_folder,
     "rename_node": _rename_node,
     "move_node": _move_node,

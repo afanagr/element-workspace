@@ -97,12 +97,15 @@ async def retrieve(
             limit=top_k or settings.rag_top_k,
             project_id=project_id,
             node_ids=node_ids,
+            score_threshold=settings.rag_score_threshold or None,
         )
     except VectorStoreError as exc:
         return RetrievalResult(error=str(exc))
 
     citations: list[Citation] = []
     seen: set[tuple[str, str]] = set()
+    per_document = max(1, settings.rag_max_per_document)
+    counts: dict[str, int] = {}
     for hit in hits:
         node_id = str(hit.get("node_id") or "")
         label = str(hit.get("label") or "")
@@ -112,7 +115,10 @@ async def retrieve(
         key = (node_id, text[:120])
         if key in seen:
             continue
+        if counts.get(node_id, 0) >= per_document:
+            continue
         seen.add(key)
+        counts[node_id] = counts.get(node_id, 0) + 1
         citations.append(
             Citation(
                 index=len(citations) + 1,

@@ -29,7 +29,7 @@ def index_nodes(self, node_ids: list[str]) -> dict[str, Any]:
     try:
         return _get_loop().run_until_complete(runner())
     except Exception as exc:  # noqa: BLE001
-        raise self.retry(exc=exc, countdown=10)
+        raise self.retry(exc=exc, countdown=10) from exc
 
 
 @celery_app.task(name="app.worker.tasks.reindex_all", bind=True)

@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 
 MAX_VERSIONS = 20
 ALLOWED_UPLOAD_EXTENSIONS = SUPPORTED_EXTENSIONS | {
-    ".zip", ".pptx", ".ppt", ".odt", ".ods", ".rtf", ".epub",
+    ".zip", ".pptx", ".ppt", ".odt", ".ods", ".odp", ".rtf", ".epub",
 }
 _FORBIDDEN_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -71,13 +71,14 @@ def sanitize_name(name: str) -> str:
     return cleaned
 
 
-def validate_upload(name: str, data: bytes) -> str:
+def validate_upload(name: str, data: bytes, *, size: int | None = None) -> str:
     """Validate extension, size and magic bytes; returns the sanitised name."""
     safe = sanitize_name(name)
     ext = extension_of(safe)
     if ext not in ALLOWED_UPLOAD_EXTENSIONS and not is_text_bytes(data):
         raise NodeError(f"Unsupported file type: {ext or 'no extension'}", status_code=415)
-    if len(data) > settings.max_upload_mb * 1024 * 1024:
+    length = size if size is not None else len(data)
+    if length > settings.max_upload_mb * 1024 * 1024:
         raise NodeError(f"File exceeds {settings.max_upload_mb} MB limit", status_code=413)
     signatures = _MAGIC_CHECKS.get(ext)
     if signatures and not any(data.startswith(signature) for signature in signatures):
@@ -260,20 +261,22 @@ async def _prune_versions(db: AsyncSession, node_id: uuid.UUID) -> None:
         await db.delete(old)
 
 
-async def write_file(
+async def _attach_content(
     db: AsyncSession,
     node: Node,
-    data: bytes,
+    key: str,
+    size: int,
+    sha: str,
     *,
     created_by: str = "ai",
     note: str | None = None,
+    mime: str | None = None,
 ) -> Node:
-    """Store new bytes for an existing file node and create a version snapshot."""
-    key, size, sha = await storage.save_bytes(data)
+    """Point the node at already-stored bytes and record a new version."""
     node.storage_key = key
     node.size = size
     node.sha256 = sha
-    node.mime = mime_for(node.name, data)
+    node.mime = mime or node.mime or mime_for(node.name)
     node.index_status = "pending"
     node.index_error = None
     node.chunk_count = 0
@@ -295,6 +298,28 @@ async def write_file(
     await db.flush()
     await _prune_versions(db, node.id)
     return node
+
+
+async def write_file(
+    db: AsyncSession,
+    node: Node,
+    data: bytes,
+    *,
+    created_by: str = "ai",
+    note: str | None = None,
+) -> Node:
+    """Store new bytes for an existing file node and create a version snapshot."""
+    key, size, sha = await storage.save_bytes(data)
+    return await _attach_content(
+        db,
+        node,
+        key,
+        size,
+        sha,
+        created_by=created_by,
+        note=note,
+        mime=mime_for(node.name, data),
+    )
 
 
 async def create_file(
@@ -342,6 +367,55 @@ async def create_file(
     db.add(node)
     await db.flush()
     await write_file(db, node, data, created_by=created_by, note=note)
+    return node, False
+
+
+async def create_file_from_storage(
+    db: AsyncSession,
+    parent_id: uuid.UUID | str,
+    name: str,
+    storage_key: str,
+    size: int,
+    sha256: str,
+    *,
+    created_by: str = "user",
+    note: str | None = None,
+    overwrite: bool = True,
+) -> tuple[Node, bool]:
+    """Create a file whose bytes are already on disk (streamed upload)."""
+    parent = await get_node(db, parent_id)
+    if parent.kind == "file":
+        raise NodeError("Cannot create a file inside a file")
+    safe = sanitize_name(name)
+    if size > settings.max_upload_mb * 1024 * 1024:
+        raise NodeError(f"File exceeds {settings.max_upload_mb} MB limit", status_code=413)
+
+    existing = await find_child(db, parent.id, safe)
+    if existing is not None:
+        if existing.kind != "file":
+            raise NodeError("A folder with this name already exists", status_code=409)
+        if not overwrite:
+            raise NodeError("A file with this name already exists", status_code=409)
+        await _attach_content(
+            db, existing, storage_key, size, sha256, created_by=created_by, note=note
+        )
+        return existing, True
+
+    project = await project_of(db, parent)
+    node = Node(
+        name=safe,
+        kind="file",
+        parent_id=parent.id,
+        project_id=project.id if project else None,
+        owner_id=parent.owner_id,
+        mime=mime_for(safe),
+        size=size,
+        storage_key=None,
+        created_by=created_by,
+    )
+    db.add(node)
+    await db.flush()
+    await _attach_content(db, node, storage_key, size, sha256, created_by=created_by, note=note)
     return node, False
 
 
