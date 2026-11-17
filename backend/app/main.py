@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -22,6 +24,26 @@ from app.services.storage import storage
 from app.services.templates import TemplateError
 
 logger = get_logger(__name__)
+
+
+async def _warm_embedding_model() -> None:
+    """Load the local RAG model in the background after startup.
+
+    Sentence-transformers imports torch and initialises the model on first use;
+    doing that inside the first chat request made ``Думаю…`` wait for tens of
+    seconds. The model is now warmed while the API is already serving requests.
+    """
+    import time
+
+    from app.llm.factory import registry
+
+    started = time.perf_counter()
+    try:
+        resolved = await registry.resolve_embeddings()
+        await resolved.provider.health()
+        logger.info("Embedding model warm-up finished in %.1fs", time.perf_counter() - started)
+    except Exception:  # noqa: BLE001 - chat must still work with providers that embed remotely
+        logger.exception("Embedding model warm-up failed")
 
 
 @asynccontextmanager
@@ -49,7 +71,13 @@ async def lifespan(app: FastAPI):
             )
     except Exception:  # noqa: BLE001 - the API must still start if the DB is late
         logger.exception("Could not bootstrap the administrator account")
+    warmup_task = asyncio.create_task(_warm_embedding_model())
     yield
+    warmup_task.cancel()
+    try:
+        await warmup_task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001 - shutdown must continue
+        pass
     from app.db import dispose_engine
     from app.llm.factory import registry
     from app.services.vectorstore import vector_store
