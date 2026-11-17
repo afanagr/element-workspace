@@ -25,6 +25,9 @@ AI read, search **and actually edit** them — with citations, streaming answers
   width is remembered), dark/light theme and a **RU/EN interface** (Russian by default, switch in
   the top bar or on the settings page).
 
+> Roadmap for file generation (templates, JSON schemas, long documents, charts, mail merge):
+> [PLAN.md](PLAN.md).
+
 Everything runs with `docker compose up`. On the first start a bootstrap administrator is created
 from `ADMIN_USERNAME` / `ADMIN_PASSWORD`; sign in, open **Admin**, create the accounts and paste
 their model connections.
