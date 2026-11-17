@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useI18n } from '@/lib/i18n';
 import type { TextPreview, WorkNode } from '@/lib/types';
-import { indexStatusKey } from '@/lib/utils';
 
 export function ImageViewer({ node, onOpenNode }: { node: WorkNode; onOpenNode: (id: string) => void }) {
   const { t } = useI18n();
@@ -36,18 +35,12 @@ export function ImageViewer({ node, onOpenNode }: { node: WorkNode; onOpenNode: 
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b px-2 py-1.5 text-xs">
-        <button type="button" className="btn" onClick={() => void runOcr()}>
-          {t('image.ocr')}
+      <div className="flex items-center gap-2 px-2 py-1.5 text-xs">
+        <button type="button" className="icon-btn-sm" onClick={() => void runOcr()} title={t('image.ocr')}>
+          🔍
         </button>
         <span className="text-[10px] text-slate-500">
           {ocr?.meta?.width ? `${String(ocr.meta.width)}×${String(ocr.meta.height)} px` : ''}
-        </span>
-        <span className="ml-auto chip">
-          {t('image.indexChip', {
-            status: t(indexStatusKey(node.index_status), { status: node.index_status }),
-            chunks: node.chunk_count,
-          })}
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto bg-[repeating-conic-gradient(#e2e8f0_0%_25%,#f8fafc_0%_50%)] bg-[length:20px_20px] p-4 dark:bg-[repeating-conic-gradient(#27272a_0%_25%,#18181b_0%_50%)]">
@@ -82,7 +75,6 @@ export function ImageViewer({ node, onOpenNode }: { node: WorkNode; onOpenNode: 
           ) : null}
         </div>
       ) : null}
-      <div className="border-t px-2 py-1 text-[10px] text-slate-500">{t('image.hint')}</div>
       <button type="button" className="hidden" onClick={() => onOpenNode(node.id)} />
     </div>
   );

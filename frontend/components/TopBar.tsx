@@ -151,13 +151,13 @@ export function TopBar({
         onClose={() => setMenu(null)}
         header={user ? `${user.display_name || user.username} · @${user.username}` : undefined}
         items={[
-          { key: 'health', label: t('app.healthRecheck'), icon: '↻', onSelect: onRefreshHealth },
-          { key: 'settings', label: t('app.settings'), icon: '⚙', onSelect: onOpenSettings },
+          { key: 'health', label: t('menu.health'), icon: '↻', onSelect: onRefreshHealth },
+          { key: 'settings', label: t('menu.settings'), icon: '⚙', onSelect: onOpenSettings },
           ...(user?.is_admin
-            ? [{ key: 'admin', label: t('app.admin'), icon: '👥', onSelect: onOpenAdmin }]
+            ? [{ key: 'admin', label: t('menu.admin'), icon: '👥', onSelect: onOpenAdmin }]
             : []),
           { key: 'divider', separator: true },
-          { key: 'logout', label: t('app.logout'), icon: '↪', danger: true, onSelect: () => void logout() },
+          { key: 'logout', label: t('menu.logout'), icon: '↪', danger: true, onSelect: () => void logout() },
         ]}
       />
     </header>

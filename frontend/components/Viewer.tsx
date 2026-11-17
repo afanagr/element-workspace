@@ -272,7 +272,7 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
   const actionItems: ContextMenuEntry[] = [
     {
       key: 'attach',
-      label: t('common.attach'),
+      label: t('menu.attach'),
       icon: '📎',
       onSelect: () => onAttach(node),
     },
@@ -302,7 +302,7 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
       ? [
           {
             key: 'reindex',
-            label: t('common.reindex'),
+            label: t('menu.reindex'),
             icon: '♻',
             onSelect: () => void reindex(),
           },
@@ -310,7 +310,7 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
       : []),
     {
       key: 'versions',
-      label: t('common.versions'),
+      label: t('menu.versions'),
       icon: '🕘',
       onSelect: () => void loadVersions(),
     },

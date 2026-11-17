@@ -574,7 +574,7 @@ export function FileTree({
         items={[
           {
             key: 'new-project',
-            label: t('tree.newProject'),
+            label: t('tree.menu.newProject'),
             icon: '＋',
             onSelect: () => setPrompt({ mode: 'project' }),
           },
