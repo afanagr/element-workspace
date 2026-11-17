@@ -65,8 +65,9 @@ async def office_download(token: str, db: AsyncSession = Depends(get_db)) -> Fil
         if user is None:
             raise office.OfficeError("Link owner no longer exists", status_code=403)
         node_service.ensure_access(node, user)
+    path = await storage.open_path(node.storage_key)
     return FileResponse(
-        storage.open_path(node.storage_key),
+        path,
         media_type=node.mime or "application/octet-stream",
         filename=node.name,
     )
