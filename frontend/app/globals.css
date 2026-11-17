@@ -416,6 +416,19 @@
     background-color: rgb(var(--surface-2) / 0.9);
   }
 
+  .btn.btn-primary {
+    background-color: rgb(var(--accent));
+    border-color: rgb(var(--accent));
+    color: #fff;
+  }
+  .btn.btn-primary:hover {
+    background-color: rgb(var(--accent) / 0.9);
+  }
+  .btn.btn-ghost {
+    background-color: transparent;
+    border-color: transparent;
+  }
+
   .chip {
     background-color: rgb(var(--surface-2) / 0.55);
     border-color: rgb(var(--border) / 0.6);
