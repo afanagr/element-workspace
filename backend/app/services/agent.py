@@ -32,6 +32,7 @@ from app.logging_config import get_logger
 from app.models import User
 from app.services import agent_prompt, chat_service
 from app.services import nodes as node_service
+from app.services import templates as template_service
 from app.services.agent_budget import AgentBudget
 from app.services.agent_prompt import (
     MAX_TOOL_CORRECTIONS,
@@ -239,6 +240,10 @@ async def run_agent(
         f"\n\nCurrent project: \"{project.name}\" (id={project.id}). "
         "Only files inside this project exist for you; never reference other projects."
     )
+    try:
+        system_prompt += "\n\n" + await template_service.prompt_block(db, user)
+    except Exception:  # noqa: BLE001 - a template issue must not break chat
+        logger.exception("Could not build the template context")
 
     previous = await chat_service.history(db, session.id, limit=30)
     messages: list[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]

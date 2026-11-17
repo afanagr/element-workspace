@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import admin, auth, chat, files, health, office, providers
+from app.api import admin, auth, chat, files, health, office, providers, templates
 from app.config import settings
 from app.db import session_scope
 from app.llm.schemas import NoProviderAvailable
@@ -19,6 +19,7 @@ from app.services.nodes import NodeError
 from app.services.office import OfficeError
 from app.services.operations import OperationError
 from app.services.storage import storage
+from app.services.templates import TemplateError
 
 logger = get_logger(__name__)
 
@@ -106,6 +107,11 @@ async def user_error_handler(request: Request, exc: user_service.UserError) -> J
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
 
+@app.exception_handler(TemplateError)
+async def template_error_handler(request: Request, exc: TemplateError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+
+
 @app.get("/api")
 async def api_root() -> dict:
     return {
@@ -124,3 +130,4 @@ app.include_router(files.router)
 app.include_router(chat.router)
 app.include_router(providers.router)
 app.include_router(office.router)
+app.include_router(templates.router)

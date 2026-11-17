@@ -25,6 +25,8 @@ const TOOL_ICONS: Record<string, string> = {
   create_pdf: '📕',
   convert_to_pdf: '📄',
   pdf_split: '✂️',
+  create_template_from_file: '📋',
+  fill_template: '🧩',
 };
 
 const TOOL_ACTIONS: Record<string, string> = {
@@ -47,6 +49,8 @@ const TOOL_ACTIONS: Record<string, string> = {
   delete_node: 'tool.action.delete',
   convert_to_pdf: 'tool.action.convert',
   pdf_split: 'tool.action.convert',
+  create_template_from_file: 'tool.action.template',
+  fill_template: 'tool.action.fill',
 };
 
 function statusTone(call: ToolCallInfo): string {

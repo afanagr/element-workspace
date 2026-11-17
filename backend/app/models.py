@@ -184,6 +184,48 @@ class NodeVersion(Base):
     node: Mapped["Node"] = relationship("Node", back_populates="versions")
 
 
+class DocumentTemplate(Base, TimestampMixin):
+    """A reusable DOCX/XLSX template.
+
+    ``scope='standard'`` templates are managed by administrators and visible to
+    every account. ``scope='user'`` templates belong to exactly one account.
+    The binary is copied into blob storage so deleting the source workspace file
+    never breaks a saved template.
+    """
+
+    __tablename__ = "document_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    scope: Mapped[str] = mapped_column(String(16), default="user", nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # docx|xlsx
+    extension: Mapped[str] = mapped_column(String(16), nullable=False)
+    mime: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    storage_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    source_node_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True
+    )
+    fields: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, nullable=False
+    )
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), default="user", nullable=False)
+
+    __table_args__ = (
+        Index("ix_document_templates_scope_owner", "scope", "owner_id"),
+        Index("ix_document_templates_name", "name"),
+    )
+
+
 class ChatSession(Base, TimestampMixin):
     __tablename__ = "chat_sessions"
 

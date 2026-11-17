@@ -7,6 +7,8 @@ import { useRequireAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import type { SettingsResponse } from '@/lib/types';
 
+import { TemplateManager } from './TemplateManager';
+
 export function SettingsPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, locale, setLocale } = useI18n();
   const auth = useRequireAuth();
@@ -19,6 +21,7 @@ export function SettingsPanel({ embedded = false }: { embedded?: boolean } = {})
   const [embeddingTest, setEmbeddingTest] = useState<{ ok: boolean; message: string } | null>(null);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [tab, setTab] = useState<'general' | 'templates'>('general');
 
   const load = useCallback(async () => {
     try {
@@ -124,6 +127,35 @@ export function SettingsPanel({ embedded = false }: { embedded?: boolean } = {})
         </header>
       ) : null}
 
+      <div className="flex gap-1 rounded-xl border border-white/20 bg-white/25 p-1 text-xs backdrop-blur dark:border-white/10 dark:bg-white/5">
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-2 py-1.5 transition ${
+            tab === 'general'
+              ? 'bg-white/80 font-medium text-slate-900 shadow-sm dark:bg-white/15 dark:text-white'
+              : 'text-slate-500 dark:text-zinc-400'
+          }`}
+          onClick={() => setTab('general')}
+        >
+          {t('settings.tabGeneral')}
+        </button>
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-2 py-1.5 transition ${
+            tab === 'templates'
+              ? 'bg-white/80 font-medium text-slate-900 shadow-sm dark:bg-white/15 dark:text-white'
+              : 'text-slate-500 dark:text-zinc-400'
+          }`}
+          onClick={() => setTab('templates')}
+        >
+          {t('settings.tabTemplates')}
+        </button>
+      </div>
+
+      {tab === 'templates' ? (
+        <TemplateManager mode="user" />
+      ) : (
+        <>
       {error ? (
         <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
           {error}
@@ -316,6 +348,8 @@ export function SettingsPanel({ embedded = false }: { embedded?: boolean } = {})
           {t('app.logout')}
         </button>
       </div>
+        </>
+      )}
     </div>
   );
 }

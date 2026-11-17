@@ -46,6 +46,32 @@ export interface VersionInfo {
   created_at: string;
 }
 
+export interface TemplateField {
+  name: string;
+  label?: string | null;
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object';
+  required: boolean;
+}
+
+export interface DocumentTemplate {
+  id: string;
+  owner_id: string | null;
+  scope: 'standard' | 'user';
+  name: string;
+  description: string;
+  kind: 'docx' | 'xlsx';
+  extension: string;
+  mime: string | null;
+  size: number;
+  source_node_id: string | null;
+  fields: TemplateField[];
+  config: Record<string, unknown>;
+  is_active: boolean;
+  created_by: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface ProviderInfo {
   name: string;
   label: string;

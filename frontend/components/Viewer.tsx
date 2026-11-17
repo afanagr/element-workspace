@@ -61,6 +61,8 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
   const [versions, setVersions] = useState<VersionInfo[] | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [converting, setConverting] = useState(false);
+  const [templatePrompt, setTemplatePrompt] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const [ocrText, setOcrText] = useState<string | null>(null);
   const [ocrPages, setOcrPages] = useState(0);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
@@ -82,6 +84,8 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
     setOcrText(null);
     setOcrPages(0);
     setConverting(false);
+    setTemplatePrompt(false);
+    setSavingTemplate(false);
     setOfficeSession(null);
     setOfficeLoading(false);
     setActionMenu(null);
@@ -217,6 +221,19 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
     }
   };
 
+  const saveAsTemplate = async (name: string) => {
+    setSavingTemplate(true);
+    try {
+      const template = await api.createTemplateFromNode(node.id, { name });
+      setTemplatePrompt(false);
+      onNotify(t('templates.savedFromFile', { name: template.name }));
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
   const loadVersions = async () => {
     try {
       setVersions(await api.versions(node.id));
@@ -306,6 +323,16 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
             icon: '♻',
             onSelect: () => void reindex(),
           },
+          ...(['.docx', '.xlsx'].includes(node.extension)
+            ? [
+                {
+                  key: 'save-template',
+                  label: t('templates.saveAsTemplate'),
+                  icon: '📋',
+                  onSelect: () => setTemplatePrompt(true),
+                },
+              ]
+            : []),
         ]
       : []),
     {
@@ -445,6 +472,15 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
         confirmLabel={t('common.rename')}
         onConfirm={rename}
         onClose={() => setRenaming(false)}
+      />
+      <PromptModal
+        open={templatePrompt}
+        title={t('templates.saveAsTemplateTitle', { name: node.name })}
+        initialValue={node.name.replace(/\.[^.]+$/, '')}
+        busy={savingTemplate}
+        confirmLabel={t('templates.saveAsTemplate')}
+        onConfirm={saveAsTemplate}
+        onClose={() => setTemplatePrompt(false)}
       />
       <ConfirmModal
         open={deleting}

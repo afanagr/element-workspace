@@ -16,6 +16,7 @@ import type {
 } from '@/lib/types';
 
 import { ConfirmModal, Modal } from './Modal';
+import { TemplateManager } from './TemplateManager';
 
 interface ConnectionDraft {
   name: string;
@@ -104,6 +105,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [tab, setTab] = useState<'users' | 'templates'>('users');
 
   const load = useCallback(async () => {
     try {
@@ -292,6 +294,35 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean } = {}) {
         </header>
       ) : null}
 
+      <div className="flex gap-1 rounded-xl border border-white/20 bg-white/25 p-1 text-xs backdrop-blur dark:border-white/10 dark:bg-white/5">
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-2 py-1.5 transition ${
+            tab === 'users'
+              ? 'bg-white/80 font-medium text-slate-900 shadow-sm dark:bg-white/15 dark:text-white'
+              : 'text-slate-500 dark:text-zinc-400'
+          }`}
+          onClick={() => setTab('users')}
+        >
+          {t('admin.tabUsers')}
+        </button>
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-2 py-1.5 transition ${
+            tab === 'templates'
+              ? 'bg-white/80 font-medium text-slate-900 shadow-sm dark:bg-white/15 dark:text-white'
+              : 'text-slate-500 dark:text-zinc-400'
+          }`}
+          onClick={() => setTab('templates')}
+        >
+          {t('admin.tabTemplates')}
+        </button>
+      </div>
+
+      {tab === 'templates' ? (
+        <TemplateManager mode="standard" />
+      ) : (
+        <>
       {error ? (
         <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
           {error}
@@ -720,6 +751,8 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean } = {}) {
           </table>
         )}
       </section>
+        </>
+      )}
     </div>
   );
 }

@@ -24,6 +24,7 @@ from app.llm.schemas import ChatMessage, ProviderError, TextDelta, ToolSpec
 from app.models import Node, Operation
 from app.services import nodes as node_service
 from app.services import office_convert
+from app.services import templates as template_service
 from app.services.documents import build_pdf_parts, build_text_document, pdf_page_count
 from app.services.indexer import enqueue_index
 from app.services.parsing import parse_document
@@ -283,6 +284,77 @@ TOOL_SPECS: list[ToolSpec] = [
         ),
     ),
     ToolSpec(
+        name="create_template_from_file",
+        description=(
+            "Save a DOCX or XLSX project file as a reusable PERSONAL template. "
+            "Use this when the user says 'сделай из этого файла шаблон'. First read the file, "
+            "then pass replacements that turn concrete values into placeholders, for example "
+            "[{find:'ООО Ромашка', field:'tenant'}, {find:'123', field:'contract_number'}]. "
+            "Existing {{ field }} placeholders are detected automatically. PDF is not a "
+            "template format: use the Word/Excel source and convert the result to PDF later."
+        ),
+        parameters=_obj(
+            {
+                "node_id": _STR,
+                "name": {"type": "string", "description": "Template name (without extension)"},
+                "description": _STR,
+                "replacements": {
+                    "type": "array",
+                    "description": "Concrete values to replace with {{ field }} placeholders",
+                    "items": _obj(
+                        {
+                            "find": _STR,
+                            "field": _STR,
+                        },
+                        ["find", "field"],
+                    ),
+                },
+                "fields": {
+                    "type": "array",
+                    "description": "Optional explicit field definitions",
+                    "items": _obj(
+                        {
+                            "name": _STR,
+                            "label": _STR,
+                            "type": {"type": "string"},
+                            "required": {"type": "boolean"},
+                        },
+                        ["name"],
+                    ),
+                },
+            },
+            ["node_id"],
+        ),
+    ),
+    ToolSpec(
+        name="fill_template",
+        description=(
+            "Create a new DOCX/XLSX file from a saved template and a data object. "
+            "Use list of available templates from the system context (never invent ids). "
+            "For DOCX, Jinja loops/conditions and {{ field }} placeholders are supported. "
+            "For XLSX, placeholders are rendered inside cells while styles and formulas stay. "
+            "Template output is DOCX/XLSX; call convert_to_pdf if the user needs PDF."
+        ),
+        parameters=_obj(
+            {
+                "template_id": _STR,
+                "data": {
+                    "type": "object",
+                    "description": "Field values; arrays are used by DOCX loops",
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Destination folder/project (defaults to the current project)",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Output file name including .docx or .xlsx",
+                },
+            },
+            ["template_id", "data"],
+        ),
+    ),
+    ToolSpec(
         name="pdf_split",
         description=(
             "Split an existing PDF into new PDF files by copying page ranges. Pages are "
@@ -538,6 +610,125 @@ async def _create_folder(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         True,
         f"Created folder {path} (id={node.id}).",
         {"node_id": str(node.id), "path": path},
+        operation_id,
+    )
+
+
+async def _create_template_from_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    if ctx.user is None:
+        raise ToolError("Authentication is required to manage templates")
+    node = await _resolve_node(ctx, args.get("node_id"))
+    replacements = args.get("replacements") or []
+    if not isinstance(replacements, list):
+        raise ToolError("replacements must be a list")
+    template = await template_service.create_from_node(
+        ctx.db,
+        ctx.user,
+        node,
+        name=str(args.get("name") or "").strip() or None,
+        description=str(args.get("description") or ""),
+        replacements=replacements,
+        fields=args.get("fields"),
+    )
+    field_names = [str(item.get("name")) for item in (template.fields or [])]
+    detail = f"Template '{template.name}' ({template.kind}) created from {node.name}"
+    if field_names:
+        detail += f"; placeholders: {', '.join(field_names)}."
+    else:
+        detail += (
+            ". No placeholders were found: recreate it with replacements so the template "
+            "can actually be filled."
+        )
+    return ToolResult(
+        True,
+        detail,
+        {
+            "template_id": str(template.id),
+            "name": template.name,
+            "kind": template.kind,
+            "scope": template.scope,
+            "fields": template.fields,
+        },
+    )
+
+
+async def _fill_template(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    if ctx.user is None:
+        raise ToolError("Authentication is required to use templates")
+    template_id = args.get("template_id") or args.get("template_node_id")
+    if not template_id:
+        raise ToolError("template_id is required")
+    template = await template_service.get_template(ctx.db, ctx.user, str(template_id))
+    parent_id = args.get("parent_id") or ctx.project_id
+    if not parent_id:
+        raise ToolError("parent_id is required when the chat has no project")
+    parent = await _resolve_node(ctx, parent_id)
+    if parent.kind == "file":
+        raise ToolError("parent_id must be a folder or project")
+    data = args.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise ToolError(f"data must be a JSON object: {exc}") from exc
+    if data is None:
+        data = {}
+
+    output_name = str(args.get("name") or f"{template.name}{template.extension}").strip()
+    if not output_name.lower().endswith(template.extension):
+        raise ToolError(
+            f"This template produces a {template.kind.upper()} file; the output name must "
+            f"end with {template.extension}. Convert the result to PDF separately if needed."
+        )
+    output_name = node_service.sanitize_name(output_name)
+    rendered, verification = await template_service.render_template(template, data)
+
+    existing = await node_service.find_child(ctx.db, parent.id, output_name)
+    undo: dict[str, Any] | None = None
+    if existing is not None:
+        if existing.kind != "file":
+            raise ToolError("A folder with this name already exists")
+        undo = _version_undo(existing)
+
+    node, replaced = await node_service.create_file(
+        ctx.db,
+        parent.id,
+        output_name,
+        rendered,
+        created_by="ai",
+        note=f"filled from template {template.name}",
+    )
+    if not replaced:
+        undo = {"action": "delete_node", "node_id": str(node.id)}
+    operation_id = await _record_operation(
+        ctx,
+        tool_name="fill_template",
+        description=f"Filled template '{template.name}' -> {node.name}",
+        node_id=node.id,
+        undo=undo,
+    )
+    enqueue_index([node.id])
+    ctx.changed_nodes.append({"id": str(node.id), "event": "updated" if replaced else "created"})
+    path = await node_service.node_path(ctx.db, node)
+    note = ""
+    if verification.get("paragraphs") is not None:
+        note = (
+            f" {verification.get('paragraphs', 0)} paragraph(s), "
+            f"{verification.get('tables', 0)} table(s)."
+        )
+    elif verification.get("sheets"):
+        note = f" Sheets: {', '.join(verification['sheets'])}."
+    return ToolResult(
+        True,
+        f"Created {path} from template '{template.name}' ({len(rendered)} bytes).{note}",
+        {
+            "node_id": str(node.id),
+            "path": path,
+            "template_id": str(template.id),
+            "bytes": len(rendered),
+            "replaced": replaced,
+            "verification": verification,
+        },
         operation_id,
     )
 
@@ -1303,6 +1494,8 @@ _HANDLERS = {
     "create_pdf": _create_pdf,
     "convert_to_pdf": _convert_to_pdf,
     "pdf_split": _pdf_split,
+    "create_template_from_file": _create_template_from_file,
+    "fill_template": _fill_template,
 }
 
 

@@ -74,6 +74,47 @@ class VersionOut(ORMModel):
     created_at: datetime
 
 
+# --------------------------------------------------------------- templates
+class TemplateFieldOut(BaseModel):
+    name: str
+    label: str | None = None
+    type: Literal["string", "number", "boolean", "array", "object"] = "string"
+    required: bool = True
+
+
+class TemplateOut(ORMModel):
+    id: uuid.UUID
+    owner_id: uuid.UUID | None = None
+    scope: Literal["standard", "user"]
+    name: str
+    description: str = ""
+    kind: Literal["docx", "xlsx"]
+    extension: str
+    mime: str | None = None
+    size: int = 0
+    source_node_id: uuid.UUID | None = None
+    fields: list[dict[str, Any]] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+    created_by: str = "user"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class TemplateUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    fields: list[TemplateFieldOut] | None = None
+
+
+class TemplateFromNodeIn(BaseModel):
+    node_id: uuid.UUID
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    replacements: list[dict[str, str]] = Field(default_factory=list)
+    fields: list[TemplateFieldOut] | None = None
+
+
 class TextPreviewOut(BaseModel):
     node_id: uuid.UUID
     name: str

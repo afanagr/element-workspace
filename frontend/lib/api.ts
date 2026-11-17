@@ -3,6 +3,7 @@ import type {
   AdminProject,
   AgentEvent,
   Citation,
+  DocumentTemplate,
   HealthResponse,
   IndexStatus,
   LoginResponse,
@@ -207,6 +208,39 @@ export const api = {
     return `${API_BASE}/api/nodes/${nodeId}/content${query ? `?${query}` : ''}`;
   },
   text: (nodeId: string) => request<TextPreview>(`/api/nodes/${nodeId}/text`),
+  templates: (scope: 'available' | 'standard' | 'mine' = 'available') =>
+    request<DocumentTemplate[]>(`/api/templates?scope=${encodeURIComponent(scope)}`),
+  createTemplate: (
+    file: File,
+    payload: { name?: string; description?: string; scope: 'standard' | 'user' },
+  ) => {
+    const form = new FormData();
+    form.append('file', file);
+    if (payload.name) form.append('name', payload.name);
+    if (payload.description) form.append('description', payload.description);
+    form.append('scope', payload.scope);
+    return request<DocumentTemplate>('/api/templates', { method: 'POST', body: form });
+  },
+  updateTemplate: (
+    templateId: string,
+    payload: { name?: string; description?: string; fields?: DocumentTemplate['fields'] },
+  ) =>
+    request<DocumentTemplate>(`/api/templates/${templateId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteTemplate: (templateId: string) =>
+    request<{ deleted: boolean }>(`/api/templates/${templateId}`, { method: 'DELETE' }),
+  createTemplateFromNode: (
+    nodeId: string,
+    payload: { name?: string; description?: string },
+  ) =>
+    request<DocumentTemplate>('/api/templates/from-node', {
+      method: 'POST',
+      body: JSON.stringify({ node_id: nodeId, ...payload }),
+    }),
+  templateDownloadUrl: (templateId: string) =>
+    `${API_BASE}/api/templates/${templateId}/download${tokenQuery()}`,
   ocr: (nodeId: string) =>
     request<TextPreview>(`/api/nodes/${nodeId}/ocr`, { method: 'POST' }),
   saveText: (nodeId: string, content: string) =>
