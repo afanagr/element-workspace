@@ -19,6 +19,10 @@ AI read, search **and actually edit** them — with citations, streaming answers
 * **Accounts, roles and isolation** — an administrator creates users, connects their models and can
   see every project. Users only ever see their own projects and their own model connections; a chat
   is bound to a single project, so retrieval and the AI tools can never reach outside it.
+* **Document templates** — administrators upload standard DOCX/XLSX templates for everyone;
+  each user has a private library and can save a project file as a template from the viewer or
+  by asking the AI in chat. Templates use `{{ field }}` placeholders (and Jinja loops in DOCX);
+  a filled document keeps the original styles and can then be converted to PDF.
 * **Viewers** — Excel (SheetJS, per-sheet tabs), Word (mammoth), PDF (PDF.js), images + OCR,
   Markdown/code/JSON with syntax highlighting.
 * **UI** — three panes: file tree · chat · viewer (the chat/viewer splitter is draggable and the
