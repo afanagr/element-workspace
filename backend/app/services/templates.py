@@ -17,6 +17,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Iterable
 from xml.sax.saxutils import escape as xml_escape
+from xml.sax.saxutils import unescape
 
 import anyio
 from sqlalchemy import or_, select
@@ -36,12 +37,18 @@ TEMPLATE_MIME = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
-_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_FIELD_RE = re.compile(r"^[^\W\d]\w*$", re.UNICODE)
 _TAG_RE = re.compile(r"{{\s*(.*?)\s*}}", re.DOTALL)
-_OLD_LOOP_RE = re.compile(r"{{\s*#\s*([A-Za-z_]\w*)\s*}}")
-_JINJA_FOR_RE = re.compile(r"{%\s*for\s+([A-Za-z_]\w*)\s+in\s+([A-Za-z_]\w*)\s*%}")
-_JINJA_IF_RE = re.compile(r"{%\s*if\s+([A-Za-z_]\w*)")
-_IDENT_RE = re.compile(r"\b([A-Za-z_]\w*)\b")
+_OLD_LOOP_RE = re.compile(r"{{\s*#\s*([^\W\d]\w*)\s*}}", re.UNICODE)
+_JINJA_FOR_RE = re.compile(r"{%\s*for\s+([^\W\d]\w*)\s+in\s+([^\W\d]\w*)\s*%}", re.UNICODE)
+_JINJA_IF_RE = re.compile(r"{%\s*if\s+([^\W\d]\w*)", re.UNICODE)
+_IDENT_RE = re.compile(r"\b([^\W\d]\w*)\b", re.UNICODE)
+# ``{{ full name }}`` is not a Jinja expression: two identifiers separated by a
+# space can only be a typo, so it gets a clear error instead of two bogus fields.
+_SPACED_NAME_RE = re.compile(r"^\s*[^\W\d]\w*(\s+[^\W\d]\w*)+\s*$", re.UNICODE)
+# Word splits a typed sentence into several ``<w:t>`` runs; placeholders are
+# detected on the concatenated text so ``{{ na`` + ``mber }}`` still counts.
+_DOCX_TEXT_RE = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.DOTALL)
 _JINJA_KEYWORDS = {
     "and", "or", "not", "in", "is", "if", "else", "for", "true", "false", "none",
     "True", "False", "None",
@@ -124,8 +131,27 @@ def _detect_text_fields(text: str) -> tuple[dict[str, dict[str, Any]], set[str],
         expr = match.group(1).strip()
         if not expr or expr.startswith(("#", "/", "!") or "|" in expr and expr.split("|", 1)[0] == ""):
             continue
+        if _SPACED_NAME_RE.match(expr):
+            raise TemplateError(
+                f"Placeholder '{{{{ {expr} }}}}' contains a space: field names cannot have "
+                f"spaces - use an underscore ({expr.replace(' ', '_')}) or a Latin name"
+            )
         _scan_expression(expr, fields, loop_vars)
     return fields, loop_vars, loops
+
+
+def _docx_part_text(xml: str) -> str:
+    """Concatenated text of all ``<w:t>`` runs of one document part.
+
+    Word stores text in many small runs, so a placeholder typed with formatting
+    changes (or pasted) may be split into ``{{ na`` + ``mber }}``. The renderer
+    (docxtpl) joins those runs, and detection must do the same - otherwise it
+    reports "no placeholders" or, worse, turns XML tag names into fields.
+    """
+    pieces = _DOCX_TEXT_RE.findall(xml)
+    if not pieces:
+        return ""
+    return unescape("".join(pieces))
 
 
 def _docx_xml_parts(data: bytes) -> list[str]:
@@ -155,7 +181,9 @@ def detect_fields(kind: str, data: bytes) -> tuple[list[dict[str, Any]], dict[st
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 for name in _docx_xml_parts(data):
-                    text = archive.read(name).decode("utf-8", "replace")
+                    text = _docx_part_text(archive.read(name).decode("utf-8", "replace"))
+                    if not text:
+                        continue
                     part_fields, _, part_loops = _detect_text_fields(text)
                     fields.update(part_fields)
                     loops.extend(part_loops)
@@ -192,7 +220,7 @@ def detect_fields(kind: str, data: bytes) -> tuple[list[dict[str, Any]], dict[st
 # --------------------------------------------------------------- binary edits
 
 def _apply_docx_replacements(data: bytes, replacements: list[dict[str, str]]) -> bytes:
-    by_find: list[tuple[str, str]] = []
+    by_find: list[tuple[str, str, str]] = []
     for item in replacements:
         find = str(item.get("find") or "").strip()
         field = str(item.get("field") or "").strip()
@@ -201,7 +229,7 @@ def _apply_docx_replacements(data: bytes, replacements: list[dict[str, str]]) ->
                 "Each replacement needs a non-empty find value and a valid field name "
                 "(letters, digits, underscore)"
             )
-        by_find.append((xml_escape(find), xml_escape("{{ " + field + " }}")))
+        by_find.append((xml_escape(find), find, xml_escape("{{ " + field + " }}")))
     if not by_find:
         return data
     try:
@@ -209,15 +237,26 @@ def _apply_docx_replacements(data: bytes, replacements: list[dict[str, str]]) ->
     except zipfile.BadZipFile as exc:
         raise TemplateError("The DOCX file is damaged") from exc
     output = io.BytesIO()
+    applied: set[str] = set()
     with source, zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target:
         for item in source.infolist():
             content = source.read(item.filename)
             if item.filename.startswith("word/") and item.filename.endswith(".xml"):
                 text = content.decode("utf-8", "replace")
-                for find, replacement in by_find:
-                    text = text.replace(find, replacement)
+                for escaped, original, replacement in by_find:
+                    if escaped in text:
+                        applied.add(original)
+                        text = text.replace(escaped, replacement)
                 content = text.encode("utf-8")
             target.writestr(item, content)
+    missing = [original for _, original, _ in by_find if original not in applied]
+    if missing:
+        preview = ", ".join(f"'{text}'" for text in missing[:3])
+        raise TemplateError(
+            f"Text {preview} was not found in the document. Word often splits a phrase into "
+            "several runs, so the exact string is not there: retype it in Word and try again, "
+            "or type {{ field }} into the document yourself."
+        )
     return output.getvalue()
 
 
@@ -233,6 +272,7 @@ def _apply_xlsx_replacements(data: bytes, replacements: list[dict[str, str]]) ->
         by_find.append((find, "{{ " + field + " }}"))
     if not by_find:
         return data
+    counts: dict[str, int] = {find: 0 for find, _ in by_find}
     try:
         from openpyxl import load_workbook
 
@@ -244,13 +284,20 @@ def _apply_xlsx_replacements(data: bytes, replacements: list[dict[str, str]]) ->
                         continue
                     value = cell.value
                     for find, replacement in by_find:
-                        value = value.replace(find, replacement)
+                        hits = value.count(find)
+                        if hits:
+                            counts[find] += hits
+                            value = value.replace(find, replacement)
                     cell.value = value
         output = io.BytesIO()
         workbook.save(output)
-        return output.getvalue()
     except Exception as exc:  # noqa: BLE001
         raise TemplateError(f"Cannot prepare the XLSX template: {exc}") from exc
+    missing = [find for find, hits in counts.items() if not hits]
+    if missing:
+        preview = ", ".join(f"'{text}'" for text in missing[:3])
+        raise TemplateError(f"Text {preview} was not found in any cell of the workbook")
+    return output.getvalue()
 
 
 # --------------------------------------------------------------- persistence
