@@ -1,7 +1,7 @@
 """Drop the unused ``app_settings`` table.
 
 Revision ID: 0007_drop_app_settings
-Revises: 0006_drop_legacy_provider_columns
+Revises: 0006_drop_provider_columns
 Create Date: 2026-11-17
 
 ``AppSetting`` was never read or written: every setting lives in the
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0007_drop_app_settings"
-down_revision = "0006_drop_legacy_provider_columns"
+down_revision = "0006_drop_provider_columns"
 branch_labels = None
 depends_on = None
 

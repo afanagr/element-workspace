@@ -1,6 +1,6 @@
 """Drop the legacy per-provider credential columns from ``users``.
 
-Revision ID: 0006_drop_legacy_provider_columns
+Revision ID: 0006_drop_provider_columns
 Revises: 0005_model_connections
 Create Date: 2026-11-16
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0006_drop_legacy_provider_columns"
+revision = "0006_drop_provider_columns"
 down_revision = "0005_model_connections"
 branch_labels = None
 depends_on = None
