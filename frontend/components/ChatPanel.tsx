@@ -245,6 +245,7 @@ export function ChatPanel({
           value={chat.sessionId ?? ''}
           onChange={(event) => void chat.selectSession(event.target.value)}
         >
+          {chat.sessions.length === 0 ? <option value="">{t('chat.newChat')}</option> : null}
           {chat.sessions.map((session) => (
             <option key={session.id} value={session.id}>
               {session.title || t('chat.fallbackTitle')}

@@ -112,12 +112,8 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
 
   if (!node) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-xs text-slate-500 dark:text-zinc-400">
-        <div className="text-4xl">🗂</div>
-        <div className="text-sm font-medium text-slate-600 dark:text-zinc-300">
-          {t('viewer.nothingTitle')}
-        </div>
-        <p className="max-w-xs">{t('viewer.nothingHint')}</p>
+      <div className="flex h-full items-center justify-center">
+        <div className="text-4xl opacity-20">🗂</div>
       </div>
     );
   }

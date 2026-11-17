@@ -187,6 +187,14 @@ export default function Workspace({ initialPanel = null }: { initialPanel?: Pane
     }
   }, [tree, selectedId]);
 
+  // Open the first project automatically so the canvas, project chip and chat
+  // are usable immediately after login without an extra click.
+  useEffect(() => {
+    if (selectedId || tree.length === 0) return;
+    const firstProject = tree.find((node) => node.kind === 'project') ?? tree[0];
+    if (firstProject) setSelectedId(firstProject.id);
+  }, [tree, selectedId]);
+
   // Leaving a project drops its attachments: context never leaks between projects.
   useEffect(() => {
     setAttachments([]);
