@@ -40,13 +40,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <form
-        onSubmit={submit}
-        className="w-full max-w-sm rounded-2xl border bg-[rgb(var(--surface))] p-6 shadow-xl"
-      >
+    <div className="app-frame flex min-h-screen items-center justify-center px-4">
+      <form onSubmit={submit} className="glass-strong w-full max-w-sm rounded-2xl p-6">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-bold text-white shadow-lg shadow-indigo-500/20">
             EW
           </div>
           <div className="leading-tight">
@@ -88,10 +85,6 @@ export default function LoginPage() {
         <button type="submit" className="btn btn-primary w-full" disabled={busy}>
           {busy ? t('common.working') : t('login.submit')}
         </button>
-
-        <p className="mt-4 text-[11px] leading-relaxed text-slate-500 dark:text-zinc-400">
-          {t('login.hint')}
-        </p>
       </form>
     </div>
   );

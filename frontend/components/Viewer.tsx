@@ -9,6 +9,7 @@ import type { VersionInfo, WorkNode } from '@/lib/types';
 import { fileGlyph, formatBytes, indexStatusKey, indexStatusTone } from '@/lib/utils';
 
 import { ConfirmModal, Modal, PromptModal } from './Modal';
+import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { DocxViewer } from './viewers/DocxViewer';
 import { ExcelViewer } from './viewers/ExcelViewer';
 import { ExtractViewer } from './viewers/ExtractViewer';
@@ -40,6 +41,17 @@ const OFFICE_EXTENSIONS = new Set([
   '.odp',
   '.pdf',
 ]);
+const CONVERTIBLE_PDF_EXTENSIONS = new Set([
+  '.docx',
+  '.odt',
+  '.rtf',
+  '.xlsx',
+  '.xlsm',
+  '.ods',
+  '.csv',
+  '.pptx',
+  '.odp',
+]);
 
 export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
   const { t } = useI18n();
@@ -48,8 +60,10 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
   const [busy, setBusy] = useState(false);
   const [versions, setVersions] = useState<VersionInfo[] | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
+  const [converting, setConverting] = useState(false);
   const [ocrText, setOcrText] = useState<string | null>(null);
   const [ocrPages, setOcrPages] = useState(0);
+  const [actionMenu, setActionMenu] = useState<{ x: number; y: number } | null>(null);
   const [officeSession, setOfficeSession] = useState<{
     nodeId: string;
     session: OfficeSession;
@@ -67,8 +81,10 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
     setDeleting(false);
     setOcrText(null);
     setOcrPages(0);
+    setConverting(false);
     setOfficeSession(null);
     setOfficeLoading(false);
+    setActionMenu(null);
   }, [node?.id]);
 
   useEffect(() => {
@@ -191,6 +207,20 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
     }
   };
 
+  const convertPdf = async () => {
+    if (converting) return;
+    setConverting(true);
+    try {
+      const created = await api.convertToPdf(node.id);
+      onNotify(t('viewer.converted', { name: created.name }));
+      await onRefresh();
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setConverting(false);
+    }
+  };
+
   const loadVersions = async () => {
     try {
       setVersions(await api.versions(node.id));
@@ -243,11 +273,84 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
     return <ExtractViewer key={`${node.id}-${node.updated_at}`} node={node} />;
   };
 
+  const actionItems: ContextMenuEntry[] = [
+    {
+      key: 'attach',
+      label: t('common.attach'),
+      icon: '📎',
+      onSelect: () => onAttach(node),
+    },
+    ...(node.kind === 'file' && node.extension === '.pdf'
+      ? [
+          {
+            key: 'ocr',
+            label: ocrBusy ? t('viewer.ocrBusy') : t('viewer.ocr'),
+            icon: '🔍',
+            disabled: ocrBusy,
+            onSelect: () => void runOcr(),
+          },
+        ]
+      : []),
+    ...(node.kind === 'file' && CONVERTIBLE_PDF_EXTENSIONS.has(node.extension)
+      ? [
+          {
+            key: 'convert-pdf',
+            label: converting ? t('viewer.converting') : t('viewer.convertPdf'),
+            icon: '📄',
+            disabled: converting,
+            onSelect: () => void convertPdf(),
+          },
+        ]
+      : []),
+    ...(node.kind === 'file'
+      ? [
+          {
+            key: 'reindex',
+            label: t('common.reindex'),
+            icon: '♻',
+            onSelect: () => void reindex(),
+          },
+        ]
+      : []),
+    {
+      key: 'versions',
+      label: t('common.versions'),
+      icon: '🕘',
+      onSelect: () => void loadVersions(),
+    },
+    {
+      key: 'rename',
+      label: t('common.rename'),
+      icon: '✎',
+      onSelect: () => setRenaming(true),
+    },
+    {
+      key: 'download',
+      label: node.kind === 'file' ? t('common.download') : `${t('common.download')} ZIP`,
+      icon: '⬇',
+      onSelect: () => window.location.assign(api.downloadUrl(node.id)),
+    },
+    { key: 'sep', separator: true },
+    {
+      key: 'delete',
+      label: t('common.delete'),
+      icon: '🗑',
+      danger: true,
+      onSelect: () => setDeleting(true),
+    },
+  ];
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[rgb(var(--surface))]">
-      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+    <div className="flex h-full min-h-0 flex-col">
+      <div
+        className="flex items-center gap-2 px-3 py-2"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setActionMenu({ x: event.clientX, y: event.clientY });
+        }}
+      >
         <span className="text-base">{fileGlyph(node)}</span>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium" title={node.name}>
             {node.name}
           </div>
@@ -265,55 +368,28 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
             ) : null}
           </div>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-1">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => onAttach(node)}
-            title={t('viewer.attachTip')}
-          >
-            {t('common.attach')}
-          </button>
-          {node.kind === 'file' && node.extension === '.pdf' ? (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => void runOcr()}
-              disabled={ocrBusy}
-              title={t('viewer.ocrHint')}
-            >
-              {ocrBusy ? t('viewer.ocrBusy') : t('viewer.ocr')}
-            </button>
-          ) : null}
-          {node.kind === 'file' ? (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => void reindex()}
-              title={t('viewer.reindexTip')}
-            >
-              {t('common.reindex')}
-            </button>
-          ) : null}
-          <button type="button" className="btn" onClick={() => void loadVersions()}>
-            {t('common.versions')}
-          </button>
-          <button type="button" className="btn" onClick={() => setRenaming(true)}>
-            {t('common.rename')}
-          </button>
-          <a className="btn" href={api.downloadUrl(node.id)}>
-            {t('common.download')}
-            {node.kind === 'file' ? '' : ' ZIP'}
-          </a>
-          <button
-            type="button"
-            className="btn text-rose-600 dark:text-rose-400"
-            onClick={() => setDeleting(true)}
-          >
-            {t('common.delete')}
-          </button>
-        </div>
+        <button
+          type="button"
+          className="icon-btn"
+          title={t('viewer.actions')}
+          aria-label={t('viewer.actions')}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            setActionMenu({ x: rect.right - 220, y: rect.bottom + 4 });
+          }}
+        >
+          ⋯
+        </button>
       </div>
+
+      <ContextMenu
+        open={actionMenu !== null}
+        x={actionMenu?.x ?? 0}
+        y={actionMenu?.y ?? 0}
+        header={node.name}
+        onClose={() => setActionMenu(null)}
+        items={actionItems}
+      />
 
       <div className="min-h-0 flex-1">
         {node.kind === 'file' ? (
@@ -322,12 +398,6 @@ export function Viewer({ node, onRefresh, onNotify, onAttach }: ViewerProps) {
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-xs text-slate-500 dark:text-zinc-400">
             <div className="text-4xl">{node.kind === 'project' ? '📁' : '📂'}</div>
             <div className="text-sm font-medium text-slate-600 dark:text-zinc-300">{node.name}</div>
-            <p>
-              {t('viewer.folderHintCount', {
-                count: node.children.length,
-                kind: t(`viewer.kind.${node.kind}`),
-              })}
-            </p>
             <a className="btn btn-primary" href={api.downloadUrl(node.id)}>
               {t('common.download')} ZIP
             </a>

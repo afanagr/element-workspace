@@ -92,7 +92,7 @@ function rowIsComplete(row: ConnectionDraft): boolean {
   return Boolean(row.name.trim() && row.base_url.trim() && row.model.trim());
 }
 
-export function AdminPanel() {
+export function AdminPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n();
   const auth = useRequireAuth();
   const [overview, setOverview] = useState<AdminOverview | null>(null);
@@ -242,7 +242,7 @@ export function AdminPanel() {
 
   if (auth.loading || !auth.user) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">
+      <div className="flex min-h-[30vh] items-center justify-center text-sm text-slate-500">
         {t('common.loading')}
       </div>
     );
@@ -250,37 +250,47 @@ export function AdminPanel() {
 
   if (!auth.user.is_admin) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-sm">
+      <div className="flex min-h-[30vh] flex-col items-center justify-center gap-3 text-sm">
         <p>{t('admin.forbidden')}</p>
-        <a className="btn" href="/">
-          {t('common.back')}
-        </a>
+        {!embedded ? (
+          <a className="btn" href="/">
+            {t('common.back')}
+          </a>
+        ) : null}
       </div>
     );
   }
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 px-4 py-6">
-      <header className="flex flex-wrap items-center gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white">
-          EW
-        </div>
-        <div className="leading-tight">
-          <h1 className="text-base font-semibold">{t('admin.title')}</h1>
-          <p className="text-[11px] text-slate-500 dark:text-zinc-400">{t('admin.subtitle')}</p>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <button type="button" className="btn" onClick={() => void load()} disabled={busy}>
-            {t('common.reload')}
-          </button>
-          <a className="btn" href="/">
-            {t('common.back')}
-          </a>
-          <a className="btn" href="/settings">
-            {t('app.settings')}
-          </a>
-        </div>
-      </header>
+    <div
+      className={
+        embedded
+          ? 'flex w-full flex-col gap-3'
+          : 'mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 px-4 py-6'
+      }
+    >
+      {!embedded ? (
+        <header className="flex flex-wrap items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white">
+            EW
+          </div>
+          <div className="leading-tight">
+            <h1 className="text-base font-semibold">{t('admin.title')}</h1>
+            <p className="text-[11px] text-slate-500 dark:text-zinc-400">{t('admin.subtitle')}</p>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button type="button" className="btn" onClick={() => void load()} disabled={busy}>
+              {t('common.reload')}
+            </button>
+            <a className="btn" href="/">
+              {t('common.back')}
+            </a>
+            <a className="btn" href="/settings">
+              {t('app.settings')}
+            </a>
+          </div>
+        </header>
+      ) : null}
 
       {error ? (
         <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">

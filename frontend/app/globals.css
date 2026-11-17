@@ -298,6 +298,195 @@
 .dark .hljs-bullet {
   color: #79c0ff;
 }
+@layer components {
+  /* Translucent surfaces: the whole app is a stack of soft glass panes. */
+  .glass {
+    background-color: rgb(var(--surface) / 0.62);
+    border: 1px solid rgb(var(--border) / 0.7);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+  }
+
+  .glass-strong {
+    background-color: rgb(var(--surface) / 0.82);
+    border: 1px solid rgb(var(--border) / 0.8);
+    backdrop-filter: blur(26px) saturate(160%);
+    -webkit-backdrop-filter: blur(26px) saturate(160%);
+    box-shadow: 0 18px 50px rgb(15 23 42 / 0.16);
+  }
+
+  .panel {
+    background-color: rgb(var(--surface) / 0.74);
+    border: 1px solid rgb(var(--border) / 0.8);
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    box-shadow: 0 10px 30px rgb(15 23 42 / 0.07);
+  }
+
+  .dark .panel {
+    box-shadow: 0 14px 40px rgb(0 0 0 / 0.35);
+  }
+
+  .pane {
+    @apply flex min-h-0 flex-col overflow-hidden rounded-2xl border;
+    background-color: rgb(var(--surface) / 0.68);
+    border-color: rgb(var(--border) / 0.65);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+  }
+
+  .icon-btn {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-sm text-slate-500 transition-colors dark:text-zinc-400;
+  }
+  .icon-btn:hover {
+    background-color: rgb(var(--surface-2) / 0.8);
+    color: rgb(var(--text));
+  }
+
+  .icon-btn-sm {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-xs text-slate-500 transition-colors dark:text-zinc-400;
+  }
+  .icon-btn-sm:hover {
+    background-color: rgb(var(--surface-2) / 0.8);
+    color: rgb(var(--text));
+  }
+
+  .popover {
+    @apply fixed z-[80] min-w-[190px] rounded-xl p-1.5;
+    background-color: rgb(var(--surface) / 0.9);
+    border: 1px solid rgb(var(--border) / 0.85);
+    box-shadow: 0 18px 50px rgb(15 23 42 / 0.2);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    animation: menu-in 120ms ease-out;
+  }
+
+  .context-menu {
+    @apply fixed z-[100] min-w-[200px] rounded-xl p-1.5;
+    background-color: rgb(var(--surface) / 0.92);
+    border: 1px solid rgb(var(--border) / 0.85);
+    box-shadow: 0 22px 60px rgb(15 23 42 / 0.24);
+    backdrop-filter: blur(26px) saturate(160%);
+    -webkit-backdrop-filter: blur(26px) saturate(160%);
+    animation: menu-in 120ms ease-out;
+  }
+
+  .context-menu .menu-item {
+    @apply rounded-lg px-2.5 py-1.5;
+  }
+  .context-menu .menu-item:disabled {
+    @apply cursor-not-allowed opacity-40;
+  }
+  .context-menu {
+    max-height: min(70vh, 520px);
+    overflow-y: auto;
+  }
+
+  .menu-label {
+    @apply px-2.5 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-slate-400 dark:text-zinc-500;
+  }
+
+  .modal-backdrop {
+    @apply fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto p-3 sm:items-center;
+    background: rgb(15 23 42 / 0.35);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    animation: fade-in 140ms ease-out;
+  }
+
+  .modal-panel {
+    @apply w-full rounded-2xl p-4;
+    background-color: rgb(var(--surface) / 0.92);
+    border: 1px solid rgb(var(--border) / 0.8);
+    box-shadow: 0 30px 80px rgb(15 23 42 / 0.3);
+    backdrop-filter: blur(28px) saturate(160%);
+    -webkit-backdrop-filter: blur(28px) saturate(160%);
+  }
+
+  .input {
+    background-color: rgb(var(--surface) / 0.55);
+  }
+
+  .btn {
+    @apply rounded-lg px-2.5 py-1.5;
+    background-color: rgb(var(--surface) / 0.5);
+    border-color: rgb(var(--border) / 0.7);
+  }
+  .btn:hover {
+    background-color: rgb(var(--surface-2) / 0.9);
+  }
+
+  .chip {
+    background-color: rgb(var(--surface-2) / 0.55);
+    border-color: rgb(var(--border) / 0.6);
+  }
+
+  .thinking-bubble {
+    @apply flex w-fit items-center gap-2 rounded-full px-3 py-1.5 text-[11px] text-slate-500 dark:text-zinc-400;
+    background-color: rgb(var(--surface-2) / 0.6);
+    border: 1px solid rgb(var(--border) / 0.55);
+    backdrop-filter: blur(14px);
+    animation: fade-in 180ms ease-out;
+  }
+
+  .thinking-dot {
+    @apply inline-block h-1.5 w-1.5 rounded-full bg-indigo-500;
+    animation: pulse-dot 1.1s infinite ease-in-out;
+  }
+  .thinking-dot:nth-child(2) {
+    animation-delay: 0.14s;
+  }
+  .thinking-dot:nth-child(3) {
+    animation-delay: 0.28s;
+  }
+
+  .status-dot {
+    @apply inline-block h-2 w-2 rounded-full;
+    box-shadow: 0 0 0 3px rgb(var(--surface) / 0.5);
+  }
+
+  .app-frame {
+    background:
+      radial-gradient(900px 500px at 12% -10%, rgb(var(--accent) / 0.16), transparent 60%),
+      radial-gradient(800px 480px at 92% 8%, rgb(56 189 248 / 0.12), transparent 55%),
+      radial-gradient(700px 520px at 50% 110%, rgb(244 114 182 / 0.08), transparent 60%),
+      rgb(var(--bg));
+  }
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
 .hljs-title,
 .hljs-section,
 .hljs-name {

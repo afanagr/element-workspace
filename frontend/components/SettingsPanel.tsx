@@ -7,7 +7,7 @@ import { useRequireAuth } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import type { SettingsResponse } from '@/lib/types';
 
-export function SettingsPanel() {
+export function SettingsPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, locale, setLocale } = useI18n();
   const auth = useRequireAuth();
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
@@ -84,7 +84,7 @@ export function SettingsPanel() {
 
   if (loading || auth.loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">
+      <div className="flex min-h-[30vh] items-center justify-center text-sm text-slate-500">
         {t('settings.loading')}
       </div>
     );
@@ -95,26 +95,34 @@ export function SettingsPanel() {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-6">
-      <header className="flex flex-wrap items-center gap-3">
-        <div>
-          <h1 className="text-base font-semibold">{t('settings.title')}</h1>
-          <p className="text-[11px] text-slate-500 dark:text-zinc-400">
-            {auth.user.display_name || auth.user.username} · @{auth.user.username} ·{' '}
-            {auth.user.is_admin ? t('admin.roleAdmin') : t('admin.roleUser')}
-          </p>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          {auth.user.is_admin ? (
-            <a className="btn" href="/admin">
-              {t('app.admin')}
+    <div
+      className={
+        embedded
+          ? 'flex w-full flex-col gap-3'
+          : 'mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 px-4 py-6'
+      }
+    >
+      {!embedded ? (
+        <header className="flex flex-wrap items-center gap-3">
+          <div>
+            <h1 className="text-base font-semibold">{t('settings.title')}</h1>
+            <p className="text-[11px] text-slate-500 dark:text-zinc-400">
+              {auth.user.display_name || auth.user.username} · @{auth.user.username} ·{' '}
+              {auth.user.is_admin ? t('admin.roleAdmin') : t('admin.roleUser')}
+            </p>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            {auth.user.is_admin ? (
+              <a className="btn" href="/admin">
+                {t('app.admin')}
+              </a>
+            ) : null}
+            <a className="btn" href="/">
+              {t('common.back')}
             </a>
-          ) : null}
-          <a className="btn" href="/">
-            {t('common.back')}
-          </a>
-        </div>
-      </header>
+          </div>
+        </header>
+      ) : null}
 
       {error ? (
         <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">

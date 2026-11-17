@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@/lib/api';
 import { useI18n } from '@/lib/i18n';
-import type { ChatMsg, ProvidersResponse, WorkNode } from '@/lib/types';
+import type { ChatMsg, Citation, ProvidersResponse, WorkNode } from '@/lib/types';
 import type { ChatController } from '@/lib/useChat';
 import { fileGlyph } from '@/lib/utils';
 
+import { ContextMenu } from './ContextMenu';
 import { Markdown } from './Markdown';
 import { ToolCallCard } from './ToolCallCard';
 
@@ -19,8 +20,16 @@ interface ChatPanelProps {
   onAttachSelected: () => void;
   onOpenNode: (id: string) => void;
   onSettings: () => void;
+  onDeleteSession: (id: string) => void | Promise<void>;
   /** Name of the project the chat is scoped to; null disables the composer. */
   projectLabel: string | null;
+}
+
+interface MessageMenu {
+  x: number;
+  y: number;
+  content: string;
+  citations: Citation[];
 }
 
 export function ChatPanel({
@@ -31,6 +40,7 @@ export function ChatPanel({
   onAttachSelected,
   onOpenNode,
   onSettings,
+  onDeleteSession,
   projectLabel,
 }: ChatPanelProps) {
   const { t } = useI18n();
@@ -39,9 +49,9 @@ export function ChatPanel({
   const [model, setModel] = useState<string>('');
   const [useRag, setUseRag] = useState(true);
   const [dynamicModels, setDynamicModels] = useState<Record<string, string[]>>({});
+  const [menu, setMenu] = useState<MessageMenu | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const selectRef = useRef<HTMLSelectElement>(null);
 
   const configured = useMemo(
     () => (providers?.providers || []).filter((item) => item.configured && item.enabled),
@@ -75,8 +85,6 @@ export function ChatPanel({
     };
   }, [provider]);
 
-  // Always send a model that the provider actually offers: prefer the provider
-  // default when it is in the live list, otherwise the first live model.
   useEffect(() => {
     if (!provider) return;
     const list = dynamicModels[provider];
@@ -105,12 +113,6 @@ export function ChatPanel({
     textareaRef.current?.focus();
   };
 
-  const activeLabel = chat.active.provider
-    ? `${chat.active.provider}${chat.active.model ? ` · ${chat.active.model}` : ''}`
-    : provider
-      ? `${provider}${model ? ` · ${model}` : ''}`
-      : 'auto';
-
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -118,36 +120,73 @@ export function ChatPanel({
     }
   };
 
+  const copyText = async (value: string) => {
+    if (!value) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = value;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        document.body.removeChild(area);
+      }
+    } catch {
+      /* clipboard can be blocked; the menu simply closes */
+    }
+  };
+
+  const openMenu = (event: React.MouseEvent, content: string, citations?: Citation[]) => {
+    if (!content && !citations?.length) return;
+    event.preventDefault();
+    setMenu({ x: event.clientX, y: event.clientY, content, citations: citations || [] });
+  };
+
   const renderMessage = (message: ChatMsg) => {
+    const citations = message.citations || (message.pending ? chat.citations : []);
     if (message.role === 'user') {
       return (
         <div key={message.id} className="flex justify-end">
-          <div className="max-w-[92%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-indigo-600 px-3 py-2 text-sm text-white">
+          <div
+            className="max-w-[92%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-indigo-500/90 px-3 py-2 text-sm text-white shadow-sm"
+            onContextMenu={(event) => openMenu(event, message.content)}
+          >
             {message.content}
           </div>
         </div>
       );
     }
 
-    const citations = message.citations || (message.pending ? chat.citations : []);
+    const visibleTools = (message.tool_calls || []).filter(
+      (call) =>
+        call.status === 'running' ||
+        call.status === 'error' ||
+        call.ok === false ||
+        Boolean(call.operation_id),
+    );
+    if (!message.content && visibleTools.length === 0 && !message.error) return null;
+
     return (
       <div key={message.id} className="space-y-2">
         {message.content ? (
-          <div className="rounded-2xl rounded-bl-sm border bg-slate-50 px-3 py-2 dark:bg-zinc-900/70">
+          <div
+            className="glass rounded-2xl rounded-bl-md px-3 py-2"
+            onContextMenu={(event) => openMenu(event, message.content, citations)}
+          >
             <Markdown content={message.content} />
             {message.pending ? (
               <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-indigo-500" />
             ) : null}
           </div>
-        ) : message.pending ? (
-          <div className="flex items-center gap-2 rounded-2xl border bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-zinc-900/70">
-            <span className="h-2 w-2 animate-ping rounded-full bg-indigo-500" /> {t('chat.thinking')}
-          </div>
         ) : null}
 
-        {message.tool_calls && message.tool_calls.length > 0 ? (
+        {visibleTools.length > 0 ? (
           <div className="space-y-1.5">
-            {message.tool_calls.map((call) => (
+            {visibleTools.map((call) => (
               <ToolCallCard
                 key={`${message.id}-${call.id}`}
                 call={call}
@@ -174,25 +213,7 @@ export function ChatPanel({
         ) : null}
 
         {message.error ? (
-          <div className="rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
-            {message.error}
-          </div>
-        ) : null}
-
-        {message.provider || message.usage ? (
-          <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
-            {message.provider ? (
-              <span>
-                {message.provider}
-                {message.model ? `/${message.model}` : ''}
-              </span>
-            ) : null}
-            {message.usage?.total_tokens ? (
-              <span>
-                {message.usage.prompt_tokens ?? 0} in / {message.usage.completion_tokens ?? 0} out
-              </span>
-            ) : null}
-          </div>
+          <p className="px-1 text-[11px] text-rose-600 dark:text-rose-400">{message.error}</p>
         ) : null}
       </div>
     );
@@ -205,11 +226,22 @@ export function ChatPanel({
     return configured.find((item) => item.name === name)?.models ?? [];
   };
 
+  const lastMessage = chat.messages[chat.messages.length - 1];
+  const lastAssistant = lastMessage?.role === 'assistant' ? lastMessage : null;
+  const lastHasContent = Boolean(lastAssistant?.content);
+  const runningTool = Boolean(lastAssistant?.tool_calls?.some((call) => call.status === 'running'));
+  const showThinking = chat.streaming && !lastHasContent;
+  const thinkingLabel = runningTool
+    ? t('chat.thinkingTools')
+    : chat.progress?.steps
+      ? t('chat.thinkingAnswer')
+      : t('chat.thinking');
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[rgb(var(--surface))]">
-      <div className="flex items-center gap-1.5 border-b px-2 py-1.5">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-1 px-2 py-1.5">
         <select
-          className="input w-36 py-1 text-xs"
+          className="input h-8 min-w-0 flex-1 py-1 text-xs"
           value={chat.sessionId ?? ''}
           onChange={(event) => void chat.selectSession(event.target.value)}
         >
@@ -219,94 +251,67 @@ export function ChatPanel({
             </option>
           ))}
         </select>
-        <button type="button" className="btn" title={t('chat.newChat')} onClick={() => void chat.newSession()}>
+        <button
+          type="button"
+          className="icon-btn"
+          title={t('chat.newChat')}
+          onClick={() => void chat.newSession()}
+        >
           ＋
         </button>
         <button
           type="button"
-          className="btn"
+          className="icon-btn"
           title={t('chat.deleteChat')}
-          onClick={() => chat.sessionId && void chat.removeSession(chat.sessionId)}
+          onClick={() => chat.sessionId && void onDeleteSession(chat.sessionId)}
         >
           🗑
         </button>
-        <span
-          className={`chip ml-auto ${
-            chat.connected
-              ? 'text-emerald-600 dark:text-emerald-400'
-              : 'text-amber-600 dark:text-amber-400'
-          }`}
-          title={chat.connected ? t('chat.liveTip') : t('chat.httpTip')}
-        >
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${chat.connected ? 'bg-emerald-500' : 'bg-amber-500'}`}
-          />
-          {chat.connected ? t('chat.live') : t('chat.http')}
-        </span>
       </div>
 
       {noProvider ? (
-        <div className="border-b border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-          <div className="font-semibold">{t('chat.noProviderTitle')}</div>
-          <p className="mt-0.5">{providers?.degraded_banner}</p>
-          <div className="mt-1.5 flex gap-2">
-            <button type="button" className="btn" onClick={onSettings}>
-              {t('chat.addKey')}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {chat.notice ? (
-        <div className="border-b border-sky-200 bg-sky-50 px-3 py-1.5 text-[11px] text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
-          {chat.notice}
+        <div className="mx-2 mb-1 flex items-center gap-2 rounded-xl border border-amber-300/40 bg-amber-50/50 px-2.5 py-1.5 text-[11px] text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/30 dark:text-amber-200">
+          <span className="flex-1 truncate">{providers?.degraded_banner}</span>
+          <button type="button" className="btn" onClick={onSettings}>
+            {t('app.settings')}
+          </button>
         </div>
       ) : null}
 
       {chat.error && chat.error.code !== 'no_provider' ? (
-        <div className="border-b border-rose-300 bg-rose-50 px-3 py-2 text-[11px] text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
-          <div className="font-semibold">
-            {chat.error.provider ? `${chat.error.provider}: ` : ''}
-            {chat.error.message}
-          </div>
-          {chat.error.status_code === 429 || chat.error.code === 'rate_limit' ? (
-            <div className="mt-1 flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  selectRef.current?.focus();
-                  chat.clearError();
-                }}
-              >
-                {t('chat.switchProvider')}
-              </button>
-              <button type="button" className="btn" onClick={onSettings}>
-                {t('app.settings')}
-              </button>
-            </div>
-          ) : chat.error.retryable ? (
-            <div className="mt-1 text-[10px] opacity-80">{t('chat.transient')}</div>
-          ) : null}
+        <div className="mx-2 mb-1 rounded-xl border border-rose-300/40 bg-rose-50/50 px-2.5 py-1.5 text-[11px] text-rose-700 dark:border-rose-800/40 dark:bg-rose-950/30 dark:text-rose-300">
+          <span className="font-medium">{chat.error.provider ? `${chat.error.provider}: ` : ''}</span>
+          {chat.error.message}
+          {(chat.error.status_code === 429 || chat.error.code === 'rate_limit') && (
+            <button type="button" className="ml-2 underline" onClick={onSettings}>
+              {t('app.settings')}
+            </button>
+          )}
         </div>
       ) : null}
 
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-auto px-3 py-3">
         {chat.messages.length === 0 ? (
-          <div className="mx-auto mt-6 max-w-xs space-y-2 text-center text-[11px] text-slate-500 dark:text-zinc-400">
-            <div className="text-3xl">💬</div>
-            <p className="font-medium text-slate-600 dark:text-zinc-300">{t('chat.welcomeTitle')}</p>
-            <p>{t('chat.example1')}</p>
-            <p>{t('chat.example2')}</p>
-            <p>{t('chat.example3')}</p>
-            <p>{t('chat.example4')}</p>
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-slate-400 dark:text-zinc-500">
+            <div className="text-2xl opacity-70">💬</div>
+            <p className="text-[11px]">{t('chat.welcomeTitle')}</p>
           </div>
         ) : (
           chat.messages.map(renderMessage)
         )}
+        {showThinking ? (
+          <div className="thinking-bubble" role="status">
+            <span className="flex items-center gap-1">
+              <span className="thinking-dot" />
+              <span className="thinking-dot" />
+              <span className="thinking-dot" />
+            </span>
+            <span>{thinkingLabel}</span>
+          </div>
+        ) : null}
       </div>
 
-      <div className="border-t p-2">
+      <div className="p-2">
         {attachments.length > 0 ? (
           <div className="mb-1.5 flex flex-wrap gap-1">
             {attachments.map((node) => (
@@ -325,10 +330,9 @@ export function ChatPanel({
           </div>
         ) : null}
 
-        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+        <div className="mb-1.5 flex items-center gap-1">
           <select
-            ref={selectRef}
-            className="input max-w-[260px] py-1 text-xs"
+            className="input h-7 min-w-0 flex-1 py-0.5 text-[11px]"
             value={provider && model ? `${provider}::${model}` : ''}
             onChange={(event) => {
               const value = event.target.value;
@@ -341,7 +345,7 @@ export function ChatPanel({
               setProvider(nextProvider);
               setModel(rest.join('::'));
             }}
-            title="Provider and model (grouped by provider)"
+            title={t('app.activeProvider')}
           >
             <option value="">{t('chat.auto')}</option>
             {configured.map((item) => (
@@ -363,23 +367,15 @@ export function ChatPanel({
             />
             {t('chat.docs')}
           </label>
-          <button
-            type="button"
-            className="btn"
-            onClick={onAttachSelected}
-            title={t('chat.attachTip')}
-          >
-            {t('common.attach')}
+          <button type="button" className="icon-btn-sm" onClick={onAttachSelected} title={t('chat.attachTip')}>
+            📎
           </button>
-          <span className="ml-auto truncate text-[10px] text-slate-400" title={t('app.activeProvider')}>
-            {activeLabel}
-          </span>
         </div>
 
         <div className="flex items-end gap-1.5">
           <textarea
             ref={textareaRef}
-            className="input min-h-[54px] max-h-40 resize-y py-2 text-sm"
+            className="input min-h-[50px] max-h-40 resize-y py-2 text-sm"
             rows={2}
             placeholder={projectLabel ? t('chat.placeholder') : t('chat.selectProjectFirst')}
             value={text}
@@ -387,50 +383,42 @@ export function ChatPanel({
             onKeyDown={onKeyDown}
             disabled={!projectLabel}
           />
-          <div className="flex flex-col gap-1.5">
-            <button
-              type="button"
-              className="btn btn-primary h-[54px] px-3"
-              disabled={chat.streaming || !text.trim() || noProvider || !projectLabel}
-              onClick={() => void submit()}
-            >
-              {t('chat.send')}
-            </button>
-            {chat.streaming ? (
-              <button
-                type="button"
-                className="btn h-[26px] px-3 text-[11px]"
-                title={t('chat.stopTip')}
-                onClick={() => chat.stop()}
-              >
-                {t('chat.stop')}
-              </button>
-            ) : null}
-          </div>
-        </div>
-        <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400">
-          <span>
-            {chat.streaming && chat.progress
-              ? t('chat.step', {
-                  n: Math.max(1, chat.progress.steps),
-                  seconds: Math.round(chat.progress.secondsLeft ?? 0),
-                })
-              : chat.stopped
-                ? t('chat.stopped')
-                : t('chat.hint')}
-          </span>
-          {chat.usage ? (
-            <span>
-              {t('chat.usage', {
-                provider: chat.usage.provider,
-                model: chat.usage.model,
-                tokens: chat.usage.usage.total_tokens,
-                ms: Math.round(chat.usage.duration_ms),
-              })}
-            </span>
-          ) : null}
+          <button
+            type="button"
+            className="flex h-[50px] w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-lg text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:opacity-40"
+            disabled={!chat.streaming && (chat.streaming || !text.trim() || noProvider || !projectLabel)}
+            onClick={() => (chat.streaming ? chat.stop() : void submit())}
+            title={chat.streaming ? t('chat.stop') : t('chat.send')}
+          >
+            {chat.streaming ? '■' : '➤'}
+          </button>
         </div>
       </div>
+
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        onClose={() => setMenu(null)}
+        items={[
+          {
+            key: 'copy',
+            label: t('chat.copy'),
+            icon: '⧉',
+            onSelect: () => void copyText(menu?.content || ''),
+          },
+          ...(menu?.citations.length
+            ? [
+                {
+                  key: 'sources',
+                  label: t('chat.openSources'),
+                  icon: '↗',
+                  onSelect: () => onOpenNode(menu.citations[0].node_id),
+                },
+              ]
+            : []),
+        ]}
+      />
     </div>
   );
 }

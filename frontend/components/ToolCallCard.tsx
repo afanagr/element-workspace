@@ -104,19 +104,19 @@ export function ToolCallCard({
         : t('tool.done');
   const verified = verificationInfo(call);
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50/70 text-xs dark:border-zinc-700 dark:bg-zinc-900/60">
+    <div className="glass overflow-hidden rounded-xl text-[11px]">
       <button
         type="button"
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
         onClick={() => setOpen((value) => !value)}
       >
-        <span>{TOOL_ICONS[call.name] || '🛠'}</span>
-        <span className="font-mono text-[11px] font-medium">{call.name}</span>
-        <span className={`ml-auto ${statusTone(call)}`}>{status}</span>
-        <span className="text-slate-400">{open ? '▾' : '▸'}</span>
+        <span className="text-sm">{TOOL_ICONS[call.name] || '🛠'}</span>
+        <span className="truncate font-mono text-[11px] font-medium">{call.name}</span>
+        <span className={`ml-auto shrink-0 ${statusTone(call)}`}>{status}</span>
+        <span className="text-[10px] text-slate-400">{open ? '▾' : '▸'}</span>
       </button>
       {open ? (
-        <div className="border-t border-slate-200 px-2.5 py-2 dark:border-zinc-700">
+        <div className="border-t border-white/10 px-2.5 py-2">
           <div className="mb-1 font-mono text-[10px] text-slate-500 dark:text-zinc-400">
             {argumentsPreview(call.arguments) || t('tool.noArgs')}
           </div>
@@ -147,13 +147,9 @@ export function ToolCallCard({
             </pre>
           </details>
         </div>
-      ) : (
-        <div className="px-2.5 pb-1.5 font-mono text-[10px] text-slate-500 dark:text-zinc-400">
-          {argumentsPreview(call.arguments)}
-        </div>
-      )}
+      ) : null}
       {call.operation_id && !call.reverted && onRevert ? (
-        <div className="flex justify-end border-t border-slate-200 px-2 py-1 dark:border-zinc-700">
+        <div className="flex justify-end border-t border-white/10 px-2 py-1">
           <button
             type="button"
             className="text-[10px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"

@@ -1,11 +1,7 @@
-import { SettingsPanel } from '@/components/SettingsPanel';
+import Workspace from '@/components/Workspace';
 
-export const metadata = { title: 'Настройки LLM · Element Workspace' };
+export const metadata = { title: 'Настройки · Element Workspace' };
 
 export default function SettingsPage() {
-  return (
-    <div className="min-h-screen">
-      <SettingsPanel />
-    </div>
-  );
+  return <Workspace initialPanel="settings" />;
 }

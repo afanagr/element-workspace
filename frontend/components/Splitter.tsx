@@ -47,10 +47,10 @@ export function Splitter({ onResize, onReset, label }: SplitterProps) {
       }}
       onPointerUp={(event) => finish(event.currentTarget)}
       onPointerCancel={(event) => finish(event.currentTarget)}
-      className="group relative z-10 hidden w-[6px] shrink-0 cursor-col-resize touch-none bg-[rgb(var(--border))] transition-colors hover:bg-indigo-400 lg:block"
+      className="group relative z-10 hidden w-2 shrink-0 cursor-col-resize touch-none bg-transparent transition-colors lg:block"
     >
       <div className="pointer-events-none absolute inset-y-0 left-1/2 flex -translate-x-1/2 items-center">
-        <div className="h-10 w-[2px] rounded bg-[rgb(var(--muted))]/40 group-hover:bg-white/70" />
+        <div className="h-10 w-[3px] rounded-full bg-slate-300/50 transition-colors group-hover:bg-indigo-400 dark:bg-white/10" />
       </div>
     </div>
   );

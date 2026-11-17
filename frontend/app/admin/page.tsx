@@ -1,7 +1,7 @@
-import { AdminPanel } from '@/components/AdminPanel';
+import Workspace from '@/components/Workspace';
 
 export const metadata = { title: 'Администрирование · Element Workspace' };
 
 export default function AdminPage() {
-  return <AdminPanel />;
+  return <Workspace initialPanel="admin" />;
 }

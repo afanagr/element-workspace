@@ -37,14 +37,12 @@ export function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 backdrop-blur-sm sm:items-center"
+      className="modal-backdrop"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div
-        className={`panel my-auto w-full ${width} max-h-[92vh] overflow-y-auto rounded-xl p-4 shadow-2xl`}
-      >
+      <div className={`modal-panel my-auto ${width} max-h-[92vh] overflow-y-auto`}>
         <div className="mb-3 flex items-start justify-between gap-3">
           <div className="leading-tight">
             <div className="text-sm font-semibold">{title}</div>
@@ -65,6 +63,63 @@ export function Modal({
         {footer ? (
           <div className="mt-4 flex flex-wrap items-center justify-end gap-2">{footer}</div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+interface OverlayPanelProps {
+  title: string;
+  subtitle?: string;
+  open: boolean;
+  width?: string;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+  onClose: () => void;
+}
+
+/** Full-height glass sheet used for Admin and Settings instead of separate pages. */
+export function OverlayPanel({
+  title,
+  subtitle,
+  open,
+  width = 'max-w-6xl',
+  children,
+  footer,
+  onClose,
+}: OverlayPanelProps) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className={`modal-panel my-auto ${width} max-h-[94vh] overflow-y-auto`}>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="leading-tight">
+            <div className="text-base font-semibold">{title}</div>
+            {subtitle ? (
+              <div className="mt-0.5 text-[11px] text-slate-500 dark:text-zinc-400">{subtitle}</div>
+            ) : null}
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="close">
+            ✕
+          </button>
+        </div>
+        {children}
+        {footer ? <div className="mt-4 flex justify-end gap-2">{footer}</div> : null}
       </div>
     </div>
   );
@@ -112,12 +167,12 @@ export function PromptModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      className="modal-backdrop"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="panel w-full max-w-sm rounded-xl p-4 shadow-2xl">
+      <div className="modal-panel w-full max-w-sm">
         <div className="mb-3 text-sm font-semibold">{title}</div>
         <input
           ref={inputRef}
@@ -173,12 +228,12 @@ export function ConfirmModal({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      className="modal-backdrop"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="panel w-full max-w-sm rounded-xl p-4 shadow-2xl">
+      <div className="modal-panel w-full max-w-sm">
         <div className="mb-2 text-sm font-semibold">{title}</div>
         <p className="mb-4 text-xs text-slate-600 dark:text-zinc-400">{message}</p>
         <div className="flex justify-end gap-2">

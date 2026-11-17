@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 
 import { api } from '@/lib/api';
 import { useRequireAuth } from '@/lib/auth';
@@ -9,22 +10,29 @@ import type { HealthResponse, IndexStatus, ProvidersResponse, WorkNode } from '@
 import { findNode, flatten } from '@/lib/utils';
 import { useChat } from '@/lib/useChat';
 
+import { AdminPanel } from './AdminPanel';
 import { ChatPanel } from './ChatPanel';
 import { FileTree } from './FileTree';
+import { OverlayPanel } from './Modal';
+import { SettingsPanel } from './SettingsPanel';
 import { Splitter } from './Splitter';
 import { TopBar } from './TopBar';
 import { Viewer } from './Viewer';
 
 type MobileView = 'tree' | 'viewer' | 'chat';
+type Panel = 'admin' | 'settings' | null;
 
 const DEFAULT_CHAT_WIDTH = 460;
 const MIN_CHAT_WIDTH = 320;
 const MIN_VIEWER_WIDTH = 320;
 const CHAT_WIDTH_KEY = 'afw-chat-width';
 
-export default function Workspace() {
+export default function Workspace({ initialPanel = null }: { initialPanel?: Panel }) {
   const { t } = useI18n();
   const auth = useRequireAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [panel, setPanel] = useState<Panel>(initialPanel);
   const [tree, setTree] = useState<WorkNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProvidersResponse | null>(null);
@@ -84,6 +92,11 @@ export default function Workspace() {
   const notify = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
     setToast({ text, tone });
   }, []);
+
+  const closePanel = useCallback(() => {
+    setPanel(null);
+    if (pathname && pathname !== '/') router.replace('/');
+  }, [pathname, router]);
 
   const refreshTree = useCallback(async () => {
     try {
@@ -218,7 +231,7 @@ export default function Workspace() {
   }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
+    <div className="app-frame flex h-screen flex-col gap-2 overflow-hidden p-2">
       <TopBar
         health={health}
         onRefreshHealth={() => {
@@ -227,22 +240,23 @@ export default function Workspace() {
         }}
         activeProvider={chat.active.provider}
         activeModel={chat.active.model}
-        providerHint={
-          providers?.providers[0]
-            ? `${providers.providers[0].name} · ${providers.providers[0].default_model}`
-            : null
-        }
         indexSummary={indexSummary}
         projectName={activeProject?.name ?? null}
         viewingOwner={ownerFilter}
+        onOpenAdmin={() => setPanel('admin')}
+        onOpenSettings={() => setPanel('settings')}
       />
 
-      <div className="flex items-center gap-1 border-b px-2 py-1 lg:hidden">
+      <div className="flex items-center gap-1 rounded-xl border border-white/20 bg-white/30 p-1 text-xs backdrop-blur dark:border-white/10 dark:bg-white/5 lg:hidden">
         {(['tree', 'viewer', 'chat'] as MobileView[]).map((view) => (
           <button
             key={view}
             type="button"
-            className={`btn flex-1 ${mobile === view ? 'btn-primary' : ''}`}
+            className={`flex-1 rounded-lg px-2 py-1.5 transition ${
+              mobile === view
+                ? 'bg-white/80 font-medium text-slate-900 shadow-sm dark:bg-white/15 dark:text-white'
+                : 'text-slate-500 dark:text-zinc-400'
+            }`}
             onClick={() => setMobile(view)}
           >
             {view === 'tree' ? t('app.filesTab') : view === 'viewer' ? t('app.viewerTab') : t('app.chatTab')}
@@ -250,24 +264,9 @@ export default function Workspace() {
         ))}
       </div>
 
-      {health?.banner ? (
-        <div className="flex items-center gap-2 border-b border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          <span className="flex-1">{health.banner}</span>
-          <a className="btn" href="/settings">
-            {t('app.openSettings')}
-          </a>
-        </div>
-      ) : null}
-
-      {!activeProjectId ? (
-        <div className="flex items-center gap-2 border-b border-indigo-200 bg-indigo-50 px-3 py-1.5 text-[11px] text-indigo-900 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">
-          <span className="flex-1">{t('app.selectProject')}</span>
-        </div>
-      ) : null}
-
-      <div ref={layoutRef} className="flex min-h-0 flex-1">
+      <div ref={layoutRef} className="flex min-h-0 flex-1 gap-2">
         <aside
-          className={`${mobile === 'tree' ? 'flex' : 'hidden'} min-h-0 w-full shrink-0 flex-col border-r lg:flex lg:w-[280px]`}
+          className={`${mobile === 'tree' ? 'flex' : 'hidden'} pane min-h-0 w-full shrink-0 lg:flex lg:w-[280px]`}
         >
           <FileTree
             nodes={tree}
@@ -286,7 +285,7 @@ export default function Workspace() {
         </aside>
 
         <section
-          className={`${mobile === 'chat' ? 'flex' : 'hidden'} min-h-0 w-full shrink-0 flex-col bg-[rgb(var(--surface))] lg:flex lg:w-[var(--chat-width)]`}
+          className={`${mobile === 'chat' ? 'flex' : 'hidden'} pane min-h-0 w-full shrink-0 lg:flex lg:w-[var(--chat-width)]`}
           style={{ '--chat-width': `${chatWidth}px` } as React.CSSProperties}
         >
           <ChatPanel
@@ -300,17 +299,14 @@ export default function Workspace() {
               setSelectedId(nodeId);
               setMobile('viewer');
             }}
-            onSettings={() => {
-              window.location.href = '/settings';
-            }}
+            onSettings={() => setPanel('settings')}
+            onDeleteSession={(id) => chat.removeSession(id)}
           />
         </section>
 
         <Splitter onResize={resizeChat} onReset={resetChatWidth} label={t('app.splitter')} />
 
-        <main
-          className={`${mobile === 'viewer' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col border-l lg:flex lg:border-l-0`}
-        >
+        <main className={`${mobile === 'viewer' ? 'flex' : 'hidden'} pane min-h-0 min-w-0 flex-1 lg:flex`}>
           <Viewer
             node={selected}
             onRefresh={refreshTree}
@@ -323,12 +319,31 @@ export default function Workspace() {
         </main>
       </div>
 
+      <OverlayPanel
+        open={panel === 'admin'}
+        title={t('admin.title')}
+        subtitle={t('admin.subtitle')}
+        width="max-w-6xl"
+        onClose={closePanel}
+      >
+        <AdminPanel embedded />
+      </OverlayPanel>
+
+      <OverlayPanel
+        open={panel === 'settings'}
+        title={t('settings.title')}
+        width="max-w-3xl"
+        onClose={closePanel}
+      >
+        <SettingsPanel embedded />
+      </OverlayPanel>
+
       {toast ? (
         <div
-          className={`fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg px-3 py-2 text-xs shadow-xl ${
+          className={`glass-strong fixed bottom-4 left-1/2 z-[90] -translate-x-1/2 rounded-full px-3.5 py-2 text-xs shadow-xl ${
             toast.tone === 'error'
-              ? 'bg-rose-600 text-white'
-              : 'bg-slate-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+              ? 'text-rose-600 dark:text-rose-400'
+              : 'text-slate-700 dark:text-zinc-200'
           }`}
           onClick={() => setToast(null)}
           role="status"

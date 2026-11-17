@@ -174,6 +174,8 @@ export const api = {
     request<{ deleted: boolean; items: number }>(`/api/nodes/${nodeId}`, { method: 'DELETE' }),
   reindex: (nodeId: string) =>
     request<{ queued: number }>(`/api/nodes/${nodeId}/reindex`, { method: 'POST' }),
+  convertToPdf: (nodeId: string) =>
+    request<WorkNode>(`/api/nodes/${nodeId}/convert/pdf`, { method: 'POST' }),
   indexStatus: () => request<IndexStatus>('/api/index/status'),
 
   upload: async (parentId: string, entries: UploadEntry[]): Promise<UploadResult> => {

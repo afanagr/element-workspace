@@ -8,6 +8,7 @@ import type { WorkNode } from '@/lib/types';
 import { fileGlyph, formatBytes, indexStatusKey, indexStatusTone } from '@/lib/utils';
 
 import { ConfirmModal, PromptModal } from './Modal';
+import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 
 interface FileTreeProps {
   nodes: WorkNode[];
@@ -24,6 +25,18 @@ type PromptState =
   | { mode: 'folder'; node: WorkNode }
   | { mode: 'rename'; node: WorkNode }
   | null;
+
+const CONVERTIBLE_PDF_EXTENSIONS = new Set([
+  '.docx',
+  '.odt',
+  '.rtf',
+  '.xlsx',
+  '.xlsm',
+  '.ods',
+  '.csv',
+  '.pptx',
+  '.odp',
+]);
 
 async function entriesFromDataTransfer(dataTransfer: DataTransfer): Promise<UploadEntry[]> {
   const output: UploadEntry[] = [];
@@ -72,6 +85,7 @@ export function FileTree({
   const { t } = useI18n();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<MenuState>(null);
+  const [rootMenu, setRootMenu] = useState<{ x: number; y: number } | null>(null);
   const [prompt, setPrompt] = useState<PromptState>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkNode | null>(null);
   const [busy, setBusy] = useState(false);
@@ -222,6 +236,16 @@ export function FileTree({
     }
   };
 
+  const convertPdf = async (node: WorkNode) => {
+    try {
+      const created = await api.convertToPdf(node.id);
+      onNotify(t('tree.notify.converted', { name: created.name }));
+      await onRefresh();
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : String(error), 'error');
+    }
+  };
+
   const onDropOnNode = async (node: WorkNode, event: React.DragEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -291,18 +315,6 @@ export function FileTree({
     return nodes.find((node) => node.kind === 'project') ?? null;
   }, [nodes, selectedId]);
 
-  const fileCount = useMemo(() => {
-    let count = 0;
-    const walk = (list: WorkNode[]) => {
-      for (const node of list) {
-        if (node.kind === 'file') count += 1;
-        if (node.children?.length) walk(node.children);
-      }
-    };
-    walk(nodes);
-    return count;
-  }, [nodes]);
-
   const openUpload = (node: WorkNode | null, mode: 'files' | 'folder' | 'zip') => {
     if (!node) {
       onNotify(t('tree.notify.needSelection'), 'error');
@@ -333,6 +345,7 @@ export function FileTree({
           }}
           onContextMenu={(event) => {
             event.preventDefault();
+            event.stopPropagation();
             setMenu({ x: event.clientX, y: event.clientY, node });
           }}
           onDragOver={(event) => {
@@ -343,10 +356,10 @@ export function FileTree({
           onDragLeave={() => setDragOverId((current) => (current === node.id ? null : current))}
           onDrop={(event) => void onDropOnNode(node, event)}
           style={{ paddingLeft: 6 + depth * 12 }}
-          className={`group flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-xs ${
+          className={`group flex cursor-pointer items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs transition-colors ${
             isSelected
-              ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'
-              : 'hover:bg-slate-100 dark:hover:bg-zinc-800'
+              ? 'bg-white/70 text-slate-900 shadow-sm dark:bg-white/10 dark:text-white'
+              : 'hover:bg-white/45 dark:hover:bg-white/5'
           } ${dragOverId === node.id ? 'ring-2 ring-indigo-400' : ''}`}
           title={
             node.kind === 'file'
@@ -376,52 +389,41 @@ export function FileTree({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[rgb(var(--surface))]">
-      <div className="flex items-center gap-1 border-b px-2 py-1.5">
-        <button
-          type="button"
-          className="btn btn-primary flex-1"
-          onClick={() => setPrompt({ mode: 'project' })}
-        >
-          {t('tree.newProject')}
-        </button>
-        <button
-          type="button"
-          className="btn"
-          title={t('tree.uploadFilesTip')}
-          onClick={() => openUpload(selectedProject, 'files')}
-        >
-          ⬆
-        </button>
-        <button
-          type="button"
-          className="btn"
-          title={t('tree.uploadFolderTip')}
-          onClick={() => openUpload(selectedProject, 'folder')}
-        >
-          🗂
-        </button>
-      </div>
-
-      <div className="border-b px-2 py-1">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-1 px-2 py-1.5">
         <input
-          className="input py-1 text-xs"
+          className="input h-8 min-w-0 flex-1 py-1 text-xs"
           placeholder={t('tree.filter')}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
+        {busy ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" /> : null}
+        <button
+          type="button"
+          className="icon-btn"
+          title={t('tree.newProject')}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            setRootMenu({ x: rect.right - 210, y: rect.bottom + 4 });
+          }}
+        >
+          ＋
+        </button>
       </div>
 
       <div
         className="min-h-0 flex-1 overflow-auto p-1.5"
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => void rootDrop(event)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setRootMenu({ x: event.clientX, y: event.clientY });
+        }}
       >
         {nodes.length === 0 ? (
-          <div className="m-2 rounded-lg border border-dashed p-4 text-center text-[11px] text-slate-500 dark:text-zinc-400">
-            <div className="mb-2 text-2xl">📁</div>
-            <p className="mb-2">{t('tree.emptyTitle')}</p>
-            <p className="mb-3">{t('tree.emptyHint')}</p>
+          <div className="flex flex-col items-center gap-2 p-4 text-center text-[11px] text-slate-500 dark:text-zinc-400">
+            <div className="text-2xl opacity-60">📁</div>
+            <p>{t('tree.emptyTitle')}</p>
             <button
               type="button"
               className="btn btn-primary"
@@ -441,15 +443,6 @@ export function FileTree({
         ) : (
           nodes.map((node) => renderRow(node, 0))
         )}
-      </div>
-
-      {busy ? (
-        <div className="border-t px-2 py-1 text-[10px] text-amber-600 dark:text-amber-400">
-          {t('common.working')}
-        </div>
-      ) : null}
-      <div className="border-t px-2 py-1 text-[10px] text-slate-500 dark:text-zinc-500">
-        {t('tree.footer', { count: fileCount })}
       </div>
 
       <input
@@ -474,109 +467,141 @@ export function FileTree({
         onChange={(event) => void handleZip(event)}
       />
 
-      {menu ? (
-        <div
-          className="panel fixed z-50 w-52 rounded-lg p-1 shadow-2xl"
-          style={{
-            left: Math.min(menu.x, window.innerWidth - 220),
-            top: Math.min(menu.y, window.innerHeight - 330),
-          }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="truncate px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400">
-            {menu.node.name}
-          </div>
-          {menu.node.kind !== 'file' ? (
-            <>
-              <button
-                type="button"
-                className="menu-item"
-                onClick={() => {
-                  setPrompt({ mode: 'folder', node: menu.node });
-                  setMenu(null);
-                }}
-              >
-                {t('tree.menu.newFolder')}
-              </button>
-              <button
-                type="button"
-                className="menu-item"
-                onClick={() => {
-                  openUpload(menu.node, 'files');
-                  setMenu(null);
-                }}
-              >
-                {t('tree.menu.uploadFiles')}
-              </button>
-              <button
-                type="button"
-                className="menu-item"
-                onClick={() => {
-                  openUpload(menu.node, 'folder');
-                  setMenu(null);
-                }}
-              >
-                {t('tree.menu.uploadFolder')}
-              </button>
-              <button
-                type="button"
-                className="menu-item"
-                onClick={() => {
-                  openUpload(menu.node, 'zip');
-                  setMenu(null);
-                }}
-              >
-                {t('tree.menu.uploadZip')}
-              </button>
-              <div className="divider my-1" />
-            </>
-          ) : null}
-          <button
-            type="button"
-            className="menu-item"
-            onClick={() => {
-              setPrompt({ mode: 'rename', node: menu.node });
-              setMenu(null);
-            }}
-          >
-            {t('tree.menu.rename')}
-          </button>
-          <a className="menu-item" href={api.downloadUrl(menu.node.id)} onClick={() => setMenu(null)}>
-            {menu.node.kind === 'file' ? t('tree.menu.downloadFile') : t('tree.menu.downloadZip')}
-          </a>
-          <button
-            type="button"
-            className="menu-item"
-            onClick={() => {
-              onAttach(menu.node);
-              setMenu(null);
-            }}
-          >
-            {t('tree.menu.attach')}
-          </button>
-          <button
-            type="button"
-            className="menu-item"
-            onClick={() => {
-              void reindex(menu.node);
-              setMenu(null);
-            }}
-          >
-            {t('tree.menu.reindex')}
-          </button>
-          <div className="divider my-1" />
-          <button
-            type="button"
-            className="menu-item text-rose-600 dark:text-rose-400"
-            onClick={() => {
-              setDeleteTarget(menu.node);
-              setMenu(null);
-            }}
-          >
-            {t('tree.menu.delete')}
-          </button>
-        </div>
-      ) : null}
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        header={menu?.node.name}
+        onClose={() => setMenu(null)}
+        items={
+          menu
+            ? [
+                {
+                  key: 'open',
+                  label: t('tree.menu.open'),
+                  icon: '↗',
+                  onSelect: () => onSelect(menu.node),
+                },
+                ...(menu.node.kind !== 'file'
+                  ? [
+                      {
+                        key: 'folder',
+                        label: t('tree.menu.newFolder'),
+                        icon: '＋',
+                        onSelect: () => setPrompt({ mode: 'folder', node: menu.node }),
+                      },
+                      {
+                        key: 'upload-files',
+                        label: t('tree.menu.uploadFiles'),
+                        icon: '⬆',
+                        onSelect: () => openUpload(menu.node, 'files'),
+                      },
+                      {
+                        key: 'upload-folder',
+                        label: t('tree.menu.uploadFolder'),
+                        icon: '🗂',
+                        onSelect: () => openUpload(menu.node, 'folder'),
+                      },
+                      {
+                        key: 'upload-zip',
+                        label: t('tree.menu.uploadZip'),
+                        icon: '🗜',
+                        onSelect: () => openUpload(menu.node, 'zip'),
+                      },
+                      { key: 'sep-upload', separator: true as const },
+                    ]
+                  : []),
+                {
+                  key: 'rename',
+                  label: t('tree.menu.rename'),
+                  icon: '✎',
+                  onSelect: () => setPrompt({ mode: 'rename', node: menu.node }),
+                },
+                {
+                  key: 'download',
+                  label:
+                    menu.node.kind === 'file'
+                      ? t('tree.menu.downloadFile')
+                      : t('tree.menu.downloadZip'),
+                  icon: '⬇',
+                  onSelect: () => window.location.assign(api.downloadUrl(menu.node.id)),
+                },
+                {
+                  key: 'attach',
+                  label: t('tree.menu.attach'),
+                  icon: '📎',
+                  onSelect: () => onAttach(menu.node),
+                },
+                ...(menu.node.kind === 'file'
+                  ? [
+                      {
+                        key: 'reindex',
+                        label: t('tree.menu.reindex'),
+                        icon: '♻',
+                        onSelect: () => void reindex(menu.node),
+                      },
+                      ...(CONVERTIBLE_PDF_EXTENSIONS.has(menu.node.extension)
+                        ? [
+                            {
+                              key: 'convert-pdf',
+                              label: t('tree.menu.convertPdf'),
+                              icon: '📄',
+                              onSelect: () => void convertPdf(menu.node),
+                            },
+                          ]
+                        : []),
+                    ]
+                  : []),
+                { key: 'sep-delete', separator: true as const },
+                {
+                  key: 'delete',
+                  label: t('tree.menu.delete'),
+                  icon: '🗑',
+                  danger: true,
+                  onSelect: () => setDeleteTarget(menu.node),
+                },
+              ]
+            : []
+        }
+      />
+
+      <ContextMenu
+        open={rootMenu !== null}
+        x={rootMenu?.x ?? 0}
+        y={rootMenu?.y ?? 0}
+        header={selectedProject?.name}
+        onClose={() => setRootMenu(null)}
+        items={[
+          {
+            key: 'new-project',
+            label: t('tree.newProject'),
+            icon: '＋',
+            onSelect: () => setPrompt({ mode: 'project' }),
+          },
+          { key: 'sep-root', separator: true },
+          {
+            key: 'upload-files',
+            label: t('tree.menu.uploadFiles'),
+            icon: '⬆',
+            disabled: !selectedProject,
+            onSelect: () => openUpload(selectedProject, 'files'),
+          },
+          {
+            key: 'upload-folder',
+            label: t('tree.menu.uploadFolder'),
+            icon: '🗂',
+            disabled: !selectedProject,
+            onSelect: () => openUpload(selectedProject, 'folder'),
+          },
+          {
+            key: 'upload-zip',
+            label: t('tree.menu.uploadZip'),
+            icon: '🗜',
+            disabled: !selectedProject,
+            onSelect: () => openUpload(selectedProject, 'zip'),
+          },
+        ]}
+      />
 
       <PromptModal
         open={prompt !== null}
