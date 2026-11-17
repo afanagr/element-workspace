@@ -27,6 +27,28 @@ const TOOL_ICONS: Record<string, string> = {
   pdf_split: '✂️',
 };
 
+const TOOL_ACTIONS: Record<string, string> = {
+  list_workspace: 'tool.action.search',
+  find_nodes: 'tool.action.search',
+  search_documents: 'tool.action.search',
+  read_file: 'tool.action.read',
+  excel_read: 'tool.action.read',
+  write_file: 'tool.action.write',
+  create_pdf: 'tool.action.write',
+  edit_file: 'tool.action.edit',
+  append_file: 'tool.action.edit',
+  translate_file: 'tool.action.edit',
+  excel_write: 'tool.action.excel',
+  excel_add_sheet: 'tool.action.excel',
+  create_project: 'tool.action.folder',
+  create_folder: 'tool.action.folder',
+  rename_node: 'tool.action.rename',
+  move_node: 'tool.action.move',
+  delete_node: 'tool.action.delete',
+  convert_to_pdf: 'tool.action.convert',
+  pdf_split: 'tool.action.convert',
+};
+
 function statusTone(call: ToolCallInfo): string {
   if (call.reverted) return 'text-slate-500 dark:text-zinc-500';
   if (call.status === 'running') return 'text-amber-600 dark:text-amber-400';
@@ -103,15 +125,17 @@ export function ToolCallCard({
         ? t('tool.failed')
         : t('tool.done');
   const verified = verificationInfo(call);
+  const actionLabel = t(TOOL_ACTIONS[call.name] || 'tool.action.other');
   return (
     <div className="glass overflow-hidden rounded-xl text-[11px]">
       <button
         type="button"
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
         onClick={() => setOpen((value) => !value)}
+        title={call.name}
       >
         <span className="text-sm">{TOOL_ICONS[call.name] || '🛠'}</span>
-        <span className="truncate font-mono text-[11px] font-medium">{call.name}</span>
+        <span className="truncate font-medium">{actionLabel}</span>
         <span className={`ml-auto shrink-0 ${statusTone(call)}`}>{status}</span>
         <span className="text-[10px] text-slate-400">{open ? '▾' : '▸'}</span>
       </button>
