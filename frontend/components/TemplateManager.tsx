@@ -302,7 +302,6 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
               placeholder={t('templates.descriptionPlaceholder')}
             />
           </label>
-          <p className="text-[11px] text-slate-500 dark:text-zinc-400">{t('templates.uploadHint')}</p>
         </div>
       </Modal>
 

@@ -299,7 +299,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean } = {}) {
           type="button"
           className={`flex-1 rounded-lg px-2 py-1.5 transition ${
             tab === 'users'
-              ? 'bg-white/80 font-medium text-slate-900 shadow-sm dark:bg-white/15 dark:text-white'
+              ? 'bg-indigo-600 font-medium text-white shadow-sm'
               : 'text-slate-500 dark:text-zinc-400'
           }`}
           onClick={() => setTab('users')}
@@ -310,7 +310,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean } = {}) {
           type="button"
           className={`flex-1 rounded-lg px-2 py-1.5 transition ${
             tab === 'templates'
-              ? 'bg-white/80 font-medium text-slate-900 shadow-sm dark:bg-white/15 dark:text-white'
+              ? 'bg-indigo-600 font-medium text-white shadow-sm'
               : 'text-slate-500 dark:text-zinc-400'
           }`}
           onClick={() => setTab('templates')}
