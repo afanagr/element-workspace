@@ -115,6 +115,24 @@ class TemplateFromNodeIn(BaseModel):
     fields: list[TemplateFieldOut] | None = None
 
 
+class TemplateProposeIn(BaseModel):
+    node_id: uuid.UUID
+
+
+class TemplateSuggestionOut(BaseModel):
+    find: str
+    field: str
+    type: str = "string"
+    reason: str = ""
+    count: int = 1
+
+
+class TemplateProposeOut(BaseModel):
+    kind: str
+    placeholders: list[str] = Field(default_factory=list)
+    suggestions: list[TemplateSuggestionOut] = Field(default_factory=list)
+
+
 class TextPreviewOut(BaseModel):
     node_id: uuid.UUID
     name: str

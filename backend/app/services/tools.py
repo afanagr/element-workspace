@@ -327,6 +327,17 @@ TOOL_SPECS: list[ToolSpec] = [
         ),
     ),
     ToolSpec(
+        name="propose_template_fields",
+        description=(
+            "Analyse a project DOCX/XLSX file and suggest which concrete values should become "
+            "{{ placeholders }} (dates, numbers, INN, amounts, organisations, names, addresses). "
+            "Call this before create_template_from_file when the user asks to make a template "
+            "from an existing document: show the list, then pass the confirmed find/field "
+            "pairs as replacements."
+        ),
+        parameters=_obj({"node_id": _STR}, ["node_id"]),
+    ),
+    ToolSpec(
         name="fill_template",
         description=(
             "Create a new DOCX/XLSX file from a saved template and a data object. "
@@ -621,6 +632,32 @@ async def _create_template_from_file(ctx: ToolContext, args: dict[str, Any]) -> 
     replacements = args.get("replacements") or []
     if not isinstance(replacements, list):
         raise ToolError("replacements must be a list")
+    kind = template_service.TEMPLATE_EXTENSIONS.get(node_service.extension_of(node.name))
+    if kind is None:
+        raise ToolError("Templates support only DOCX and XLSX files")
+    if not replacements and not args.get("fields"):
+        # Nothing was confirmed yet: suggest the variable values instead of
+        # silently saving a template that cannot be filled.
+        data = await storage.read_bytes(node.storage_key)
+        existing, _config = await anyio.to_thread.run_sync(
+            template_service.detect_fields, kind, data
+        )
+        if not existing:
+            proposal = await anyio.to_thread.run_sync(
+                template_service.propose_replacements, kind, data
+            )
+            if proposal["suggestions"]:
+                lines = [
+                    f"- {item['find']} -> {item['field']} ({item['reason']}, {item['count']}x)"
+                    for item in proposal["suggestions"][:15]
+                ]
+                return ToolResult(
+                    True,
+                    f"No {{{{ placeholders }}}} in {node.name} yet. Suggested replacements - "
+                    "confirm them with the user, then call create_template_from_file with these "
+                    "find/field pairs:\n" + "\n".join(lines),
+                    {"suggestions": proposal["suggestions"], "template_created": False},
+                )
     template = await template_service.create_from_node(
         ctx.db,
         ctx.user,
@@ -649,6 +686,42 @@ async def _create_template_from_file(ctx: ToolContext, args: dict[str, Any]) -> 
             "scope": template.scope,
             "fields": template.fields,
         },
+    )
+
+
+async def _propose_template_fields(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    """Suggest placeholder candidates for an existing document."""
+    node = await _resolve_node(ctx, args.get("node_id"))
+    if node.kind != "file" or not node.storage_key:
+        raise ToolError("Only a file can become a template")
+    kind = template_service.TEMPLATE_EXTENSIONS.get(node_service.extension_of(node.name))
+    if kind is None:
+        raise ToolError("Templates support only DOCX and XLSX files")
+    data = await storage.read_bytes(node.storage_key)
+    fields, _config = await anyio.to_thread.run_sync(
+        template_service.detect_fields, kind, data
+    )
+    proposal = await anyio.to_thread.run_sync(
+        template_service.propose_replacements, kind, data
+    )
+    placeholders = [str(item["name"]) for item in fields]
+    suggestions = proposal["suggestions"]
+    if not suggestions:
+        return ToolResult(
+            True,
+            f"No placeholders and no obvious variable values were found in {node.name}. "
+            "Type {{ field }} placeholders into the file or pass replacements manually.",
+            {"suggestions": [], "placeholders": placeholders},
+        )
+    lines = [
+        f"- {item['find']} -> {item['field']} ({item['reason']}, {item['count']}x)"
+        for item in suggestions[:15]
+    ]
+    return ToolResult(
+        True,
+        f"Suggested placeholders for {node.name} (confirm with the user, then call "
+        "create_template_from_file with these replacements):\n" + "\n".join(lines),
+        {"suggestions": suggestions, "placeholders": placeholders},
     )
 
 
@@ -1495,6 +1568,7 @@ _HANDLERS = {
     "convert_to_pdf": _convert_to_pdf,
     "pdf_split": _pdf_split,
     "create_template_from_file": _create_template_from_file,
+    "propose_template_fields": _propose_template_fields,
     "fill_template": _fill_template,
 }
 

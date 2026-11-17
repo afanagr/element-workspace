@@ -55,6 +55,7 @@
 | UI 6 | Мёртвые компоненты | ✅ | проверено: все используются |
 | Admin | `supports_tools` | ✅ | колонка «Инструменты» в редакторе подключений (+ поле в `connection_to_dict`) |
 | OCR | Качество распознавания | ✅ | препроцессинг + deskew + перебор PSM + языковой фолбэк + инвалидация кэша (см. раздел ниже) |
+| Templates | Авто-создание шаблона | ✅ | `propose_replacements` + `POST /api/templates/propose` + tool `propose_template_fields`; замены работают и для «разорванных» Word-ом строк |
 | 18 | Разбить `agent.py` | ⏳ | промпт/эвристики → `agent_prompt.py`, бюджет → `agent_budget.py`; цикл остался в `agent.py` |
 | 19 | `LLMLog kind="agent_step"` | ✅ | шаг пишется с токенами и длительностью |
 | 20 | Квоты / circuit breaker | ❌ | требует продуктного решения по бюджетам |

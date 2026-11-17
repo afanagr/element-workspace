@@ -144,14 +144,16 @@ def _docx_part_text(xml: str) -> str:
     """Concatenated text of all ``<w:t>`` runs of one document part.
 
     Word stores text in many small runs, so a placeholder typed with formatting
-    changes (or pasted) may be split into ``{{ na`` + ``mber }}``. The renderer
-    (docxtpl) joins those runs, and detection must do the same - otherwise it
-    reports "no placeholders" or, worse, turns XML tag names into fields.
+    changes (or pasted) may be split into ``{{ na`` + ``mber }}``. Runs are
+    joined inside each paragraph (the renderer does the same) and paragraphs are
+    separated by a newline, so unrelated paragraphs never merge into one value.
     """
-    pieces = _DOCX_TEXT_RE.findall(xml)
-    if not pieces:
-        return ""
-    return unescape("".join(pieces))
+    paragraphs: list[str] = []
+    for chunk in xml.split("</w:p>"):
+        pieces = _DOCX_TEXT_RE.findall(chunk)
+        if pieces:
+            paragraphs.append(unescape("".join(pieces)))
+    return "\n".join(paragraphs)
 
 
 def _docx_xml_parts(data: bytes) -> list[str]:
@@ -217,7 +219,187 @@ def detect_fields(kind: str, data: bytes) -> tuple[list[dict[str, Any]], dict[st
     return list(fields.values()), config
 
 
+# --------------------------------------------------------------- suggestions
+# Concrete values that are almost always filled in per document. The admin or
+# the agent picks the useful ones and turns them into {{ placeholders }}.
+_SUGGESTION_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "field": "contract_number",
+        "reason": "number after 'No'",
+        "pattern": r"№\s*([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9/_-]{1,30})",
+        "group": 1,
+    },
+    {"field": "date", "reason": "date", "pattern": r"\b\d{2}[./]\d{2}[./]\d{4}\b"},
+    {
+        "field": "date",
+        "reason": "date",
+        "pattern": (
+            r"\b\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|"
+            r"сентября|октября|ноября|декабря)\s+\d{4}(?:\s*г\.?)?"
+        ),
+    },
+    {"field": "inn", "reason": "INN", "pattern": r"\bИНН\s*[:№]?\s*(\d{10}|\d{12})\b", "group": 1},
+    {"field": "ogrn", "reason": "OGRN", "pattern": r"\bОГРНИП?\s*[:№]?\s*(\d{13}|\d{15})\b", "group": 1},
+    {"field": "kpp", "reason": "KPP", "pattern": r"\bКПП\s*[:№]?\s*(\d{9})\b", "group": 1},
+    {
+        "field": "amount",
+        "reason": "money amount",
+        "pattern": r"\b\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d{2})?\s*(?:рубль|рубля|рублей|руб\.?|₽|RUB)",
+    },
+    {
+        "field": "amount",
+        "reason": "money amount",
+        "pattern": r"(?:\$|€)\s?\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d{2})?",
+    },
+    {
+        "field": "email",
+        "reason": "e-mail",
+        "pattern": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+    },
+    {
+        "field": "phone",
+        "reason": "phone",
+        "pattern": r"(?:\+7|\b8)[\s(]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}\b",
+    },
+    {
+        "field": "organization",
+        "reason": "company name",
+        "pattern": r"(?:ООО|АО|ПАО|ЗАО|ИП)\s+[«\"“]?[^»\"”\n,.;]{2,60}[»\"”]?",
+    },
+    {
+        "field": "address",
+        "reason": "address",
+        "pattern": (
+            r"\b(?:г\.|город)\s*[А-ЯЁ][^,\n]{1,40}"
+            r"(?:,\s*(?:ул\.|улица|пр-т|проспект|пер\.|д\.)[^,\n]{1,60}){0,3}"
+        ),
+    },
+    {
+        "field": "full_name",
+        "reason": "person name",
+        "pattern": (
+            r"\b[А-ЯЁ][а-яё]{1,20}\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.|"
+            r"\b[А-ЯЁ][а-яё]{1,20}\s+[А-ЯЁ][а-яё]{1,20}\s+[А-ЯЁ][а-яё]{1,20}\b"
+        ),
+    },
+)
+
+
+def _document_text(kind: str, data: bytes) -> str:
+    """Plain text of a template candidate: DOCX runs or XLSX cell values."""
+    if kind == "docx":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                parts = [
+                    _docx_part_text(archive.read(name).decode("utf-8", "replace"))
+                    for name in _docx_xml_parts(data)
+                ]
+        except zipfile.BadZipFile as exc:
+            raise TemplateError("The DOCX file is damaged or is not a real Word document") from exc
+        return "\n".join(part for part in parts if part)
+    if kind == "xlsx":
+        try:
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(io.BytesIO(data), data_only=False)
+            try:
+                values: list[str] = []
+                for worksheet in workbook.worksheets:
+                    for row in worksheet.iter_rows():
+                        for cell in row:
+                            if isinstance(cell.value, str) and cell.value.strip():
+                                values.append(cell.value)
+                return "\n".join(values)
+            finally:
+                workbook.close()
+        except Exception as exc:  # noqa: BLE001
+            raise TemplateError(f"Cannot read the XLSX file: {exc}") from exc
+    raise TemplateError("Templates support only DOCX and XLSX files", status_code=415)
+
+
+def _unique_field(base: str, used: set[str]) -> str:
+    name = re.sub(r"\W+", "_", base, flags=re.UNICODE).strip("_") or "field"
+    if not name[0].isalpha() and name[0] != "_":
+        name = f"f_{name}"
+    candidate = name
+    index = 2
+    while candidate in used:
+        candidate = f"{name}_{index}"
+        index += 1
+    used.add(candidate)
+    return candidate
+
+
+def propose_replacements(kind: str, data: bytes) -> dict[str, Any]:
+    """Suggest concrete values that should become ``{{ placeholders }}``.
+
+    Rule-based on purpose: every suggestion must contain the *exact* text of the
+    document, otherwise the replacement would silently do nothing.
+    """
+    text = _document_text(kind, data)
+    placeholder_spans = [match.span() for match in _TAG_RE.finditer(text)]
+
+    def inside_placeholder(start: int, end: int) -> bool:
+        return any(
+            start < span_end and end > span_start for span_start, span_end in placeholder_spans
+        )
+
+    candidates: list[tuple[int, int, str, dict[str, Any]]] = []
+    for rule in _SUGGESTION_RULES:
+        pattern = re.compile(rule["pattern"], re.UNICODE)
+        group = int(rule.get("group") or 0)
+        for match in pattern.finditer(text):
+            start, end = match.span(group) if group else match.span(0)
+            value = (match.group(group) if group else match.group(0)) or ""
+            value = value.strip()
+            if len(value) < 2 or inside_placeholder(start, end):
+                continue
+            candidates.append((start, end, value, rule))
+
+    # Prefer earlier and longer matches and never let two suggestions overlap.
+    candidates.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+    selected: list[tuple[int, int, str, dict[str, Any]]] = []
+    for candidate in candidates:
+        start, end = candidate[0], candidate[1]
+        if any(
+            start < other_end and end > other_start
+            for other_start, other_end, _value, _rule in selected
+        ):
+            continue
+        selected.append(candidate)
+
+    used_fields: set[str] = set()
+    field_by_value: dict[str, str] = {}
+    suggestions: list[dict[str, Any]] = []
+    for start, _end, value, rule in selected:
+        field = field_by_value.get(value)
+        if field is None:
+            field = _unique_field(str(rule["field"]), used_fields)
+            field_by_value[value] = field
+        suggestions.append(
+            {
+                "find": value,
+                "field": field,
+                "type": rule.get("type", "string"),
+                "reason": rule.get("reason", ""),
+                "count": text.count(value),
+                "offset": start,
+            }
+        )
+    return {"kind": kind, "suggestions": suggestions[:40], "chars": len(text)}
+
+
+
+
 # --------------------------------------------------------------- binary edits
+
+def _loose_xml_pattern(find: str) -> re.Pattern[str] | None:
+    """Regex that matches ``find`` even when Word split it into several runs."""
+    parts = [r"\s+" if char.isspace() else re.escape(char) for char in find]
+    if not parts:
+        return None
+    return re.compile(r"(?:<[^>]+>)*".join(parts), re.DOTALL)
+
 
 def _apply_docx_replacements(data: bytes, replacements: list[dict[str, str]]) -> bytes:
     by_find: list[tuple[str, str, str]] = []
@@ -247,6 +429,14 @@ def _apply_docx_replacements(data: bytes, replacements: list[dict[str, str]]) ->
                     if escaped in text:
                         applied.add(original)
                         text = text.replace(escaped, replacement)
+                        continue
+                    loose = _loose_xml_pattern(original)
+                    if loose is None:
+                        continue
+                    updated, hits = loose.subn(replacement, text, count=1)
+                    if hits:
+                        applied.add(original)
+                        text = updated
                 content = text.encode("utf-8")
             target.writestr(item, content)
     missing = [original for _, original, _ in by_find if original not in applied]

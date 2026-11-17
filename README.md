@@ -142,6 +142,20 @@ container is capped at 3 GB RAM in `docker-compose.yml`, so the host needs rough
 memory for the whole stack. `GET /api/health` reports the Document Server under
 `checks.documentserver`.
 
+### Automatic template creation
+
+A document does not have to be edited by hand to become a template:
+
+* `POST /api/templates/propose` (agent tool `propose_template_fields`) analyses a workspace DOCX/XLSX
+  and returns **suggested** replacements: dates, contract numbers, INN/OGRN/KPP, money amounts,
+  phones, e-mails, organisation names, addresses and person names - each with the exact text to
+  replace and a suggested field name (duplicates become `date`, `date_2`, …).
+* `POST /api/templates/from-node` (agent tool `create_template_from_file`) applies the confirmed
+  pairs and saves the template. Replacements are matched even when Word split the phrase into
+  several runs, and text that is not found is reported instead of being silently ignored.
+* In chat: "сделай из этого договора шаблон" - the assistant calls `propose_template_fields`,
+  shows the list, and creates the template after you confirm.
+
 ### Roles
 
 | role | can do |

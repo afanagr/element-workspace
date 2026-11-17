@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import anyio
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.deps import current_user
 from app.models import User
-from app.schemas import TemplateFromNodeIn, TemplateOut, TemplateUpdateIn
+from app.schemas import (
+    TemplateFromNodeIn,
+    TemplateOut,
+    TemplateProposeIn,
+    TemplateProposeOut,
+    TemplateUpdateIn,
+)
 from app.services import nodes as node_service
 from app.services import templates as template_service
 from app.services.storage import storage
@@ -121,6 +128,35 @@ async def delete_template(
     await template_service.delete_template(db, user, template)
     await db.commit()
     return {"deleted": True}
+
+
+@router.post("/propose", response_model=TemplateProposeOut)
+async def propose_template_fields(
+    payload: TemplateProposeIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    """Suggest concrete values (dates, INN, amounts, names...) to turn into placeholders."""
+    node = await node_service.get_node_for(db, payload.node_id, user)
+    if node.kind != "file" or not node.storage_key:
+        raise template_service.TemplateError("Only a file can become a template")
+    kind = template_service.TEMPLATE_EXTENSIONS.get(node_service.extension_of(node.name))
+    if kind is None:
+        raise template_service.TemplateError(
+            "Templates support only DOCX and XLSX files", status_code=415
+        )
+    data = await storage.read_bytes(node.storage_key)
+    fields, _config = await anyio.to_thread.run_sync(
+        template_service.detect_fields, kind, data
+    )
+    proposal = await anyio.to_thread.run_sync(
+        template_service.propose_replacements, kind, data
+    )
+    return {
+        "kind": kind,
+        "placeholders": [str(item["name"]) for item in fields],
+        "suggestions": proposal["suggestions"],
+    }
 
 
 @router.get("/{template_id}/download")
