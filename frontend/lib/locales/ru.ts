@@ -417,4 +417,9 @@ export const ru: Record<string, string> = {
   'templates.saveAsTemplateTitle': 'Шаблон из «{name}»',
   'templates.saveAsTemplateHint': 'Файл будет сохранён в «Мои шаблоны».',
   'templates.savedFromFile': 'Шаблон «{name}» сохранён.',
+  'templates.aiMarkup': 'Разметить с ИИ',
+  'templates.aiMarkupBusy': 'ИИ размечает…',
+  'templates.aiMarkupHint': 'Можно загрузить обычный DOCX/XLSX без плейсхолдеров: после загрузки нажмите «Разметить с ИИ», и модель сама предложит и заменит изменяемые значения. Содержимое шаблона будет отправлено в вашу подключённую модель.',
+  'templates.aiMarkupDone': 'ИИ разметил шаблон: {count} поле(й), пропущено {skipped}.',
+  'templates.uploadedNoFields': 'Шаблон «{name}» сохранён. Плейсхолдеры не найдены — нажмите «Разметить с ИИ».',
 };

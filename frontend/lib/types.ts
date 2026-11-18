@@ -70,6 +70,8 @@ export interface DocumentTemplate {
   created_by: string;
   created_at: string | null;
   updated_at: string | null;
+  markup_applied?: number;
+  markup_skipped?: number;
 }
 
 export interface ProviderInfo {

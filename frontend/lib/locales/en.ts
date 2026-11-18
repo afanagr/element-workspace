@@ -417,4 +417,9 @@ export const en: Record<string, string> = {
   'templates.saveAsTemplateTitle': 'Template from “{name}”',
   'templates.saveAsTemplateHint': 'The file will be saved to “My templates”.',
   'templates.savedFromFile': 'Template “{name}” saved.',
+  'templates.aiMarkup': 'Mark up with AI',
+  'templates.aiMarkupBusy': 'AI is marking up…',
+  'templates.aiMarkupHint': 'You can upload a normal DOCX/XLSX without placeholders: after upload click “Mark up with AI” and the model will propose and replace variable values. The template content is sent to your connected model.',
+  'templates.aiMarkupDone': 'AI marked up the template: {count} field(s), {skipped} skipped.',
+  'templates.uploadedNoFields': 'Template “{name}” saved. No placeholders found — click “Mark up with AI”.',
 };

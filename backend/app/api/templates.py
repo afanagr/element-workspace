@@ -118,6 +118,25 @@ async def update_template(
     return template_service.template_to_dict(updated)  # type: ignore[return-value]
 
 
+@router.post("/{template_id}/markup", response_model=TemplateOut)
+async def markup_template(
+    template_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    """Use the account's AI model to replace document values with placeholders."""
+    template = await template_service.get_template(db, user, template_id)
+    updated, applied, skipped = await template_service.markup_template_with_ai(
+        db, user, template
+    )
+    await db.commit()
+    await db.refresh(updated)
+    payload = template_service.template_to_dict(updated)
+    payload["markup_applied"] = applied
+    payload["markup_skipped"] = skipped
+    return payload  # type: ignore[return-value]
+
+
 @router.delete("/{template_id}")
 async def delete_template(
     template_id: uuid.UUID,

@@ -30,6 +30,7 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
   const [pendingDelete, setPendingDelete] = useState<DocumentTemplate | null>(null);
   const [renameTarget, setRenameTarget] = useState<DocumentTemplate | null>(null);
   const [details, setDetails] = useState<DocumentTemplate | null>(null);
+  const [markingId, setMarkingId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -68,7 +69,11 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
         description: description.trim() || undefined,
         scope: mode === 'standard' ? 'standard' : 'user',
       });
-      setNotice(t('templates.uploaded', { name: created.name }));
+      setNotice(
+        created.fields.length === 0
+          ? t('templates.uploadedNoFields', { name: created.name })
+          : t('templates.uploaded', { name: created.name }),
+      );
       closeUpload();
       await load();
     } catch (err) {
@@ -110,6 +115,28 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
     }
   };
 
+  const markup = async (template: DocumentTemplate) => {
+    if (markingId) return;
+    setMarkingId(template.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await api.markupTemplate(template.id);
+      setNotice(
+        t('templates.aiMarkupDone', {
+          count: updated.fields.length,
+          skipped: updated.markup_skipped ?? 0,
+        }),
+      );
+      setDetails(updated);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMarkingId(null);
+    }
+  };
+
   const standard = templates.filter((item) => item.scope === 'standard');
   const mine = templates.filter((item) => item.scope === 'user');
   const primary = mode === 'standard' ? standard : mine;
@@ -138,9 +165,19 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
 
       <div className="flex flex-wrap gap-1">
         {template.fields.length === 0 ? (
-          <span className="text-[10px] text-amber-600 dark:text-amber-400">
-            {t('templates.noFields')}
-          </span>
+          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-amber-700 dark:text-amber-300">
+            <span>{t('templates.noFields')}</span>
+            {!readOnly ? (
+              <button
+                type="button"
+                className="btn px-2 py-0.5 text-[10px]"
+                disabled={markingId === template.id}
+                onClick={() => void markup(template)}
+              >
+                ✨ {markingId === template.id ? t('templates.aiMarkupBusy') : t('templates.aiMarkup')}
+              </button>
+            ) : null}
+          </div>
         ) : (
           template.fields.slice(0, 5).map((field) => (
             <span key={field.name} className="chip text-[10px]" title={field.name}>
@@ -302,6 +339,12 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
               placeholder={t('templates.descriptionPlaceholder')}
             />
           </label>
+          <p className="text-[11px] text-slate-500 dark:text-zinc-400">{t('templates.aiMarkupHint')}</p>
+          {error ? (
+            <p className="rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+              {error}
+            </p>
+          ) : null}
         </div>
       </Modal>
 

@@ -11,6 +11,7 @@ OnlyOffice converter.
 from __future__ import annotations
 
 import io
+import json
 import re
 import uuid
 import zipfile
@@ -24,10 +25,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.llm.schemas import ChatMessage, NoProviderAvailable, ProviderError, TextDelta
 from app.logging_config import get_logger
 from app.models import DocumentTemplate, Node, User
 from app.services import nodes as node_service
-from app.services.parsing import extension_of
+from app.services.parsing import extension_of, parse_document
 from app.services.storage import storage
 
 logger = get_logger(__name__)
@@ -814,7 +816,151 @@ async def render_template(
     return output, verification
 
 
-# ------------------------------------------------------------------- prompt
+# --------------------------------------------------------------- AI markup
+
+_MARKUP_SYSTEM = """You convert a normal business document into a reusable template.
+Return ONLY a JSON object with this shape:
+{"replacements":[{"find":"exact text from the document","field":"snake_case_name","label":"human label"}]}
+
+Find concrete, changeable values: company and person names, addresses, phone/email,
+INN/KPP/OGRN, bank accounts, contract numbers, dates, amounts, descriptions and
+similar data. Do NOT replace labels, headings, section titles, standard legal
+boilerplate or generic words. Each find value must be an exact substring of the
+document text. Use concise ASCII field names (letters, digits, underscore only).
+Do not include markdown fences or comments. If nothing looks variable, return
+{"replacements":[]}."""
+
+
+def _parse_ai_json(raw: str) -> dict[str, Any]:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        raise TemplateError("The AI returned no JSON object")
+    try:
+        value = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise TemplateError(f"The AI returned invalid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise TemplateError("The AI returned an unexpected JSON value")
+    return value
+
+
+async def markup_template_with_ai(
+    db: AsyncSession, user: User, template: DocumentTemplate
+) -> tuple[DocumentTemplate, int, int]:
+    """Ask the user's chat model to identify variable values and tag them.
+
+    The model proposes exact ``find`` strings from extracted text; we validate
+    every string against the text and then replace it in the DOCX/XLSX binary
+    with a Jinja placeholder. The original file is never modified.
+    """
+    from app.llm.factory import registry
+
+    raw = await storage.read_bytes(template.storage_key)
+    try:
+        parsed = await anyio.to_thread.run_sync(
+            parse_document, f"template{template.extension}", raw
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise TemplateError(f"Cannot read the template text: {exc}") from exc
+    text = (parsed.text or "").strip()
+    if not text:
+        raise TemplateError("The document has no extractable text to analyse")
+
+    try:
+        resolved = await registry.resolve(db, user)
+    except NoProviderAvailable as exc:
+        raise TemplateError(
+            "AI markup needs a connected chat model. Ask an administrator to connect one.",
+            status_code=503,
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise TemplateError(f"Cannot start AI markup: {exc}", status_code=503) from exc
+
+    messages = [
+        ChatMessage(role="system", content=_MARKUP_SYSTEM),
+        ChatMessage(role="user", content="DOCUMENT TEXT:\n" + text[:24_000]),
+    ]
+    chunks: list[str] = []
+    try:
+        async for event in resolved.provider.chat_stream(
+            messages, model=resolved.model, temperature=0.0
+        ):
+            if isinstance(event, TextDelta):
+                chunks.append(event.text)
+    except ProviderError as exc:
+        raise TemplateError(f"AI markup failed: {exc.message}", status_code=502) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise TemplateError(f"AI markup failed: {exc}", status_code=502) from exc
+
+    payload = _parse_ai_json("".join(chunks))
+    proposed = payload.get("replacements")
+    if not isinstance(proposed, list) or not proposed:
+        raise TemplateError(
+            "The AI found no variable values. Try asking in chat to replace specific values "
+            "with fields, or prepare the file with {{ field }} placeholders."
+        )
+
+    replacements: list[dict[str, str]] = []
+    skipped: list[str] = []
+    provided_fields: list[dict[str, Any]] = []
+    seen_fields: set[str] = set()
+    for item in proposed[:40]:
+        if not isinstance(item, dict):
+            continue
+        find = str(item.get("find") or "").strip()
+        field = str(item.get("field") or "").strip()
+        label = str(item.get("label") or field).strip()
+        if not find or find not in text or not _FIELD_RE.match(field):
+            skipped.append(find[:80] or field)
+            continue
+        if field in seen_fields:
+            continue
+        seen_fields.add(field)
+        replacements.append({"find": find, "field": field})
+        provided_fields.append({"name": field, "label": label or field, "type": "string", "required": True})
+
+    if not replacements:
+        raise TemplateError(
+            "The AI proposed no replacements that exist in the document. "
+            "Try asking in chat to parametrise specific values."
+        )
+
+    new_data = (
+        await anyio.to_thread.run_sync(_apply_docx_replacements, raw, replacements)
+        if template.kind == "docx"
+        else await anyio.to_thread.run_sync(_apply_xlsx_replacements, raw, replacements)
+    )
+    detected, config = detect_fields(template.kind, new_data)
+    if not detected:
+        raise TemplateError(
+            "The replacements were found, but they could not be applied safely "
+            "(the value may be split across Word runs). Prepare this value as one run "
+            "or use a DOCX/XLSX template with explicit {{ field }} placeholders."
+        )
+    fields = _merge_fields(detected, provided_fields)
+    old_key = template.storage_key
+    key, size, digest = await storage.save_bytes(new_data)
+    template.storage_key = key
+    template.size = size
+    template.sha256 = digest
+    template.fields = fields
+    template.config = config
+    await db.flush()
+    storage.delete(old_key)
+    logger.info(
+        "AI marked up template %s: %s replacements, %s skipped",
+        template.id,
+        len(replacements),
+        len(skipped),
+    )
+    return template, len(replacements), len(skipped)
+
+
 async def prompt_block(db: AsyncSession, user: User) -> str:
     """A compact, deterministic list of templates the model may use."""
     templates = await list_templates(db, user, "available")

@@ -99,6 +99,8 @@ class TemplateOut(ORMModel):
     created_by: str = "user"
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    markup_applied: int = 0
+    markup_skipped: int = 0
 
 
 class TemplateUpdateIn(BaseModel):

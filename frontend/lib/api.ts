@@ -231,6 +231,8 @@ export const api = {
     }),
   deleteTemplate: (templateId: string) =>
     request<{ deleted: boolean }>(`/api/templates/${templateId}`, { method: 'DELETE' }),
+  markupTemplate: (templateId: string) =>
+    request<DocumentTemplate>(`/api/templates/${templateId}/markup`, { method: 'POST' }),
   createTemplateFromNode: (
     nodeId: string,
     payload: { name?: string; description?: string },
