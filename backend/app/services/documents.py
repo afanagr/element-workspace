@@ -18,6 +18,12 @@ _MD_BULLET = re.compile(r"^\s*[-*+]\s+(.*)$")
 _MD_NUMBERED = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 _INLINE = re.compile(r"(\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|`[^`]+`)")
 _TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
+_BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
+
+
+def _clean_breaks(value: Any) -> str:
+    """Turn literal ``<br>`` tags (often emitted by models) into real newlines."""
+    return _BR_RE.sub("\n", str(value if value is not None else ""))
 
 
 def build_xlsx(
@@ -62,7 +68,7 @@ def _xlsx_value(value: Any) -> Any:
         return value
     if isinstance(value, (list, tuple, dict)):
         return json.dumps(value, ensure_ascii=False)
-    text = str(value)
+    text = _clean_breaks(value)
     if text.startswith("="):
         return text
     stripped = text.strip()
@@ -165,12 +171,12 @@ def _safe_sheet_name(name: str) -> str:
 
 def _cell(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
-        return value
+        return _clean_breaks(value) if isinstance(value, str) else value
     if isinstance(value, (list, tuple, dict)):
         import json
 
         return json.dumps(value, ensure_ascii=False)
-    return str(value)
+    return _clean_breaks(value)
 
 
 def build_csv(rows: Sequence[Sequence[Any]]) -> bytes:
@@ -210,15 +216,19 @@ def _style_exists(document: Any, name: str) -> bool:
 def _add_inline(paragraph: Any, text: str, *, bold: bool = False) -> None:
     from docx.shared import Pt
 
-    for chunk, style in _inline_parts(text):
-        run = paragraph.add_run(chunk)
-        if bold or style == "bold":
-            run.bold = True
-        if style == "italic":
-            run.italic = True
-        if style == "code":
-            run.font.name = "Courier New"
-            run.font.size = Pt(9)
+    lines = _clean_breaks(text).split("\n")
+    for line_index, line in enumerate(lines):
+        if line_index:
+            paragraph.add_run().add_break()
+        for chunk, style in _inline_parts(line):
+            run = paragraph.add_run(chunk)
+            if bold or style == "bold":
+                run.bold = True
+            if style == "italic":
+                run.italic = True
+            if style == "code":
+                run.font.name = "Courier New"
+                run.font.size = Pt(9)
 
 
 def _table_cells(line: str) -> list[str] | None:
@@ -313,7 +323,8 @@ def _render_docx_markdown(document: Any, text: str) -> None:
         heading = _MD_HEADING.match(stripped)
         if heading:
             document.add_heading(
-                heading.group(2), level=min(len(heading.group(1)) + 1, 9)
+                _clean_breaks(heading.group(2)).replace("\n", " "),
+                level=min(len(heading.group(1)) + 1, 9),
             )
             index += 1
             continue
@@ -373,7 +384,7 @@ def _render_docx_blocks(document: Any, blocks: list[Any]) -> None:
             continue
         kind = str(block.get("type") or "paragraph").lower()
         if kind == "heading":
-            value = str(block.get("text") or "")
+            value = _clean_breaks(block.get("text") or "").replace("\n", " ")
             if value:
                 try:
                     level = int(block.get("level") or 1)
@@ -532,7 +543,7 @@ def build_pdf(text: str, *, title: str | None = None) -> bytes:
     if title:
         story.append(Paragraph(escape(title), heading))
         story.append(Spacer(1, 6 * mm))
-    for raw_line in (text or "").splitlines():
+    for raw_line in _clean_breaks(text).splitlines():
         line = raw_line.strip()
         if not line:
             story.append(Spacer(1, 3 * mm))
@@ -685,7 +696,7 @@ def apply_sheet_edits(data: bytes, cells: Sequence[dict[str, Any]]) -> bytes:
 def _coerce_cell(value: Any) -> Any:
     if value is None:
         return None
-    text = str(value)
+    text = _clean_breaks(value)
     if not text.strip():
         return None
     if text.startswith("="):

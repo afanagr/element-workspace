@@ -48,6 +48,7 @@ _IDENT_RE = re.compile(r"\b([^\W\d]\w*)\b", re.UNICODE)
 # ``{{ full name }}`` is not a Jinja expression: two identifiers separated by a
 # space can only be a typo, so it gets a clear error instead of two bogus fields.
 _SPACED_NAME_RE = re.compile(r"^\s*[^\W\d]\w*(\s+[^\W\d]\w*)+\s*$", re.UNICODE)
+_BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
 # Word splits a typed sentence into several ``<w:t>`` runs; placeholders are
 # detected on the concatenated text so ``{{ na`` + ``mber }}`` still counts.
 _DOCX_TEXT_RE = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.DOTALL)
@@ -802,7 +803,16 @@ def _read_back(kind: str, data: bytes) -> dict[str, Any]:
 async def render_template(
     template: DocumentTemplate, data: Any
 ) -> tuple[bytes, dict[str, Any]]:
-    context = _validate_data(template, data)
+    def clean_value(value: Any) -> Any:
+        if isinstance(value, str):
+            return _BR_RE.sub("\n", value)
+        if isinstance(value, list):
+            return [clean_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: clean_value(item) for key, item in value.items()}
+        return value
+
+    context = clean_value(_validate_data(template, data))
     raw = await storage.read_bytes(template.storage_key)
     if template.kind == "docx":
         output = await anyio.to_thread.run_sync(_render_docx, template, raw, context)
