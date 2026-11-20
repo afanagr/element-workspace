@@ -62,7 +62,12 @@ def _link_key() -> bytes:
 
 
 def sign_link(
-    node_id: uuid.UUID | str, kind: str, ttl: int, *, user_id: uuid.UUID | str | None = None
+    node_id: uuid.UUID | str,
+    kind: str,
+    ttl: int,
+    *,
+    user_id: uuid.UUID | str | None = None,
+    version: str | None = None,
 ) -> str:
     """Create a compact HMAC-signed token for a download or callback URL."""
     payload: dict[str, Any] = {
@@ -72,6 +77,10 @@ def sign_link(
     }
     if user_id is not None:
         payload["u"] = str(user_id)
+    if version:
+        # The callback must not overwrite a newer file written while the editor
+        # was open (e.g. by the AI or another user).
+        payload["v"] = version
     body = _b64url(json.dumps(payload, separators=(",", ":")).encode())
     signature = hmac.new(_link_key(), body.encode(), hashlib.sha256).digest()
     return f"{body}.{_b64url(signature)}"
@@ -156,6 +165,7 @@ def build_editor_config(node: "Node", user: "User") -> dict[str, Any]:
         "cb",
         settings.onlyoffice_callback_ttl,
         user_id=user.id,
+        version=node.sha256,
     )
     api_base = settings.onlyoffice_api_url.rstrip("/")
     stamp = 0

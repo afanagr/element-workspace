@@ -150,7 +150,23 @@ async def office_callback(
         return JSONResponse(status_code=400, content={"error": 1})
     if len(data) > settings.max_upload_mb * 1024 * 1024:
         logger.warning("OnlyOffice returned a file larger than the upload limit")
-        return JSONResponse({"error": 1})
+        return JSONResponse(status_code=400, content={"error": 1})
+
+    expected_version = str(payload.get("v") or "")
+    if not expected_version or (node.sha256 and node.sha256 != expected_version):
+        logger.warning(
+            "Ignoring stale/legacy OnlyOffice save for node %s (opened at %s, current %s)",
+            node.id,
+            expected_version[:12] or "unknown",
+            (node.sha256 or "")[:12] or "unknown",
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": 1,
+                "message": "The file was changed by another process; reopen the editor",
+            },
+        )
 
     if node_service.extension_of(node.name) == ".csv" and office.is_zip_bytes(data):
         # OnlyOffice stores CSV as an OOXML workbook; convert it back so the
