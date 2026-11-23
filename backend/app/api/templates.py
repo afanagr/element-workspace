@@ -13,6 +13,8 @@ from app.db import get_db
 from app.deps import current_user
 from app.models import User
 from app.schemas import (
+    NodeOut,
+    TemplateFillIn,
     TemplateFromNodeIn,
     TemplateOut,
     TemplateProposeIn,
@@ -21,6 +23,7 @@ from app.schemas import (
 )
 from app.services import nodes as node_service
 from app.services import templates as template_service
+from app.services.indexer import enqueue_index
 from app.services.storage import storage
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
@@ -135,6 +138,41 @@ async def markup_template(
     payload["markup_applied"] = applied
     payload["markup_skipped"] = skipped
     return payload  # type: ignore[return-value]
+
+
+@router.post("/{template_id}/fill", response_model=NodeOut)
+async def fill_template(
+    template_id: uuid.UUID,
+    payload: TemplateFillIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = CurrentUser,
+) -> dict:
+    """Create a project file from a template without using the chat."""
+    template = await template_service.get_template(db, user, template_id)
+    parent = await node_service.get_node_for(db, payload.parent_id, user)
+    if parent.kind == "file":
+        raise template_service.TemplateError("parent_id must be a folder or project")
+    output_name = (payload.name or f"{template.name}{template.extension}").strip()
+    if not output_name.lower().endswith(template.extension):
+        raise template_service.TemplateError(
+            f"This template produces {template.kind.upper()}; the file name must end with "
+            f"{template.extension}"
+        )
+    rendered, verification = await template_service.render_template(template, payload.data)
+    node, replaced = await node_service.create_file(
+        db,
+        parent.id,
+        node_service.sanitize_name(output_name),
+        rendered,
+        created_by=user.username,
+        note=f"filled from template {template.name}",
+    )
+    await db.commit()
+    await db.refresh(node)
+    enqueue_index([node.id])
+    result = node_service.node_to_dict(node)
+    result["verification"] = verification
+    return result  # type: ignore[return-value]
 
 
 @router.delete("/{template_id}")

@@ -117,6 +117,12 @@ class TemplateFromNodeIn(BaseModel):
     fields: list[TemplateFieldOut] | None = None
 
 
+class TemplateFillIn(BaseModel):
+    parent_id: uuid.UUID
+    name: str | None = Field(default=None, max_length=200)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class TemplateProposeIn(BaseModel):
     node_id: uuid.UUID
 

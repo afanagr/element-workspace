@@ -15,6 +15,7 @@ import json
 import re
 import uuid
 import zipfile
+from copy import copy
 from pathlib import Path
 from typing import Any, Iterable
 from xml.sax.saxutils import escape as xml_escape
@@ -44,6 +45,7 @@ _TAG_RE = re.compile(r"{{\s*(.*?)\s*}}", re.DOTALL)
 _OLD_LOOP_RE = re.compile(r"{{\s*#\s*([^\W\d]\w*)\s*}}", re.UNICODE)
 _JINJA_FOR_RE = re.compile(r"{%\s*for\s+([^\W\d]\w*)\s+in\s+([^\W\d]\w*)\s*%}", re.UNICODE)
 _JINJA_IF_RE = re.compile(r"{%\s*if\s+([^\W\d]\w*)", re.UNICODE)
+_JINJA_ENDFOR_RE = re.compile(r"{%\s*endfor\s*%}")
 _IDENT_RE = re.compile(r"\b([^\W\d]\w*)\b", re.UNICODE)
 # ``{{ full name }}`` is not a Jinja expression: two identifiers separated by a
 # space can only be a typo, so it gets a clear error instead of two bogus fields.
@@ -745,6 +747,103 @@ def _render_docx(template: DocumentTemplate, data: bytes, context: dict[str, Any
     return result
 
 
+def _excel_loops(worksheet: Any) -> list[tuple[int, int, str, str]]:
+    """Find row-level ``{% for item in items %}`` blocks in a worksheet."""
+    loops: list[tuple[int, int, str, str]] = []
+    start_row: int | None = None
+    variable = ""
+    source = ""
+    for row_index in range(1, int(worksheet.max_row or 0) + 1):
+        for cell in worksheet[row_index]:
+            if not isinstance(cell.value, str):
+                continue
+            for_match = _JINJA_FOR_RE.search(cell.value)
+            if for_match and start_row is None:
+                start_row = row_index
+                variable, source = for_match.groups()
+            if start_row is not None and _JINJA_ENDFOR_RE.search(cell.value):
+                loops.append((start_row, row_index, variable, source))
+                start_row = None
+                variable = ""
+                source = ""
+                break
+    return loops
+
+
+def _copy_cell_style(source: Any, target: Any) -> None:
+    target._style = copy(source._style)
+    target.number_format = source.number_format
+    target.font = copy(source.font)
+    target.fill = copy(source.fill)
+    target.border = copy(source.border)
+    target.alignment = copy(source.alignment)
+    target.protection = copy(source.protection)
+
+
+def _render_excel_value(
+    value: Any, context: dict[str, Any], environment: Any
+) -> Any:
+    if not isinstance(value, str):
+        return value
+    cleaned = _JINJA_FOR_RE.sub("", value)
+    cleaned = _JINJA_ENDFOR_RE.sub("", cleaned)
+    if "{{" not in cleaned and "{%" not in cleaned:
+        return cleaned if cleaned != value else value
+    rendered = environment.from_string(cleaned).render(**context)
+    if rendered[:1] in {"=", "+", "-", "@"}:
+        return "'" + rendered
+    return rendered
+
+
+def _expand_excel_loops(
+    worksheet: Any, context: dict[str, Any], environment: Any
+) -> None:
+    """Repeat worksheet rows for list fields while preserving cell styles.
+
+    A loop is a row block with ``{% for item in items %}`` in any cell and
+    ``{% endfor %}`` in a later (or the same) row. The block is rendered once
+    per list item. Loops are processed bottom-up so row insertion does not
+    invalidate earlier coordinates.
+    """
+    loops = _excel_loops(worksheet)
+    for start, end, variable, source in sorted(loops, key=lambda item: item[0], reverse=True):
+        items = context.get(source)
+        if not isinstance(items, list):
+            raise TemplateError(f"Excel loop '{source}' requires a list value")
+        block_len = end - start + 1
+        max_column = int(worksheet.max_column or 0)
+        rows: list[dict[int, Any]] = []
+        heights: list[float | None] = []
+        for row_index in range(start, end + 1):
+            values: dict[int, Any] = {}
+            for column in range(1, max_column + 1):
+                values[column] = worksheet.cell(row_index, column).value
+            rows.append(values)
+            heights.append(worksheet.row_dimensions[row_index].height)
+
+        if not items:
+            worksheet.delete_rows(start, block_len)
+            continue
+        if len(items) > 1:
+            worksheet.insert_rows(start + block_len, (len(items) - 1) * block_len)
+
+        for item_index, item in enumerate(items):
+            item_context = dict(context)
+            item_context[variable] = item
+            base_row = start + item_index * block_len
+            for block_row in range(block_len):
+                target_row = base_row + block_row
+                worksheet.row_dimensions[target_row].height = heights[block_row]
+                for column in range(1, max_column + 1):
+                    source_cell = worksheet.cell(start + block_row, column)
+                    target_cell = worksheet.cell(target_row, column)
+                    if target_row != start + block_row:
+                        _copy_cell_style(source_cell, target_cell)
+                    target_cell.value = _render_excel_value(
+                        rows[block_row].get(column), item_context, environment
+                    )
+
+
 def _render_xlsx(template: DocumentTemplate, data: bytes, context: dict[str, Any]) -> bytes:
     try:
         from jinja2 import StrictUndefined
@@ -755,6 +854,7 @@ def _render_xlsx(template: DocumentTemplate, data: bytes, context: dict[str, Any
         workbook = load_workbook(io.BytesIO(data), data_only=False)
         try:
             for worksheet in workbook.worksheets:
+                _expand_excel_loops(worksheet, context, environment)
                 for row in worksheet.iter_rows():
                     for cell in row:
                         value = cell.value

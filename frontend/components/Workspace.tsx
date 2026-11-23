@@ -164,6 +164,15 @@ export default function Workspace({ initialPanel = null }: { initialPanel?: Pane
     return () => clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    const onWorkspaceChanged = () => {
+      void refreshTree();
+      void refreshIndex();
+    };
+    window.addEventListener('afw-workspace-changed', onWorkspaceChanged);
+    return () => window.removeEventListener('afw-workspace-changed', onWorkspaceChanged);
+  }, [refreshTree, refreshIndex]);
+
   const hasPending = useMemo(
     () =>
       flatten(tree).some(

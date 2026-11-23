@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '@/lib/api';
 import { useI18n } from '@/lib/i18n';
-import type { DocumentTemplate, TemplateField } from '@/lib/types';
+import type { DocumentTemplate, TemplateField, WorkNode } from '@/lib/types';
 
 import { ConfirmModal, Modal, PromptModal } from './Modal';
 
@@ -31,6 +31,13 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
   const [renameTarget, setRenameTarget] = useState<DocumentTemplate | null>(null);
   const [details, setDetails] = useState<DocumentTemplate | null>(null);
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [fillTarget, setFillTarget] = useState<DocumentTemplate | null>(null);
+  const [fillProjects, setFillProjects] = useState<WorkNode[]>([]);
+  const [fillProject, setFillProject] = useState('');
+  const [fillName, setFillName] = useState('');
+  const [fillValues, setFillValues] = useState<Record<string, string>>({});
+  const [fillError, setFillError] = useState<string | null>(null);
+  const [filling, setFilling] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -80,6 +87,65 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const openFill = async (template: DocumentTemplate) => {
+    setFillTarget(template);
+    setFillName(`${template.name}${template.extension}`);
+    setFillValues(Object.fromEntries(template.fields.map((field) => [field.name, ''])));
+    setFillError(null);
+    setError(null);
+    try {
+      const tree = await api.tree();
+      const projects = tree.filter((node) => node.kind === 'project');
+      setFillProjects(projects);
+      setFillProject(projects[0]?.id ?? '');
+    } catch (err) {
+      setFillError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const fill = async () => {
+    if (!fillTarget || !fillProject || filling) return;
+    setFilling(true);
+    setFillError(null);
+    try {
+      const data: Record<string, unknown> = {};
+      for (const field of fillTarget.fields) {
+        const raw = (fillValues[field.name] ?? '').trim();
+        if (!raw) {
+          if (field.required) {
+            throw new Error(t('templates.requiredField', { field: field.label || field.name }));
+          }
+          continue;
+        }
+        if (field.type === 'array' || field.type === 'object') {
+          try {
+            data[field.name] = JSON.parse(raw);
+          } catch {
+            throw new Error(t('templates.invalidJson', { field: field.label || field.name }));
+          }
+        } else {
+          data[field.name] = raw;
+        }
+      }
+      let name = fillName.trim() || `${fillTarget.name}${fillTarget.extension}`;
+      if (!name.toLowerCase().endsWith(fillTarget.extension)) {
+        name += fillTarget.extension;
+      }
+      const created = await api.fillTemplate(fillTarget.id, {
+        parent_id: fillProject,
+        name,
+        data,
+      });
+      setNotice(t('templates.fillDone', { name: created.name }));
+      setFillTarget(null);
+      window.dispatchEvent(new CustomEvent('afw-workspace-changed'));
+    } catch (err) {
+      setFillError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFilling(false);
     }
   };
 
@@ -199,6 +265,16 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
         >
           {t('templates.fields')}
         </button>
+        {template.fields.length > 0 ? (
+          <button
+            type="button"
+            className="btn btn-primary px-2 py-1 text-[11px]"
+            disabled={filling}
+            onClick={() => void openFill(template)}
+          >
+            {t('templates.createDocument')}
+          </button>
+        ) : null}
         <a
           className="btn px-2 py-1 text-[11px]"
           href={api.templateDownloadUrl(template.id)}
@@ -346,6 +422,97 @@ export function TemplateManager({ mode }: TemplateManagerProps) {
             </p>
           ) : null}
         </div>
+      </Modal>
+
+      <Modal
+        open={fillTarget !== null}
+        title={t('templates.fillTitle', { name: fillTarget?.name ?? '' })}
+        subtitle={t('templates.fillHint')}
+        width="max-w-2xl"
+        onClose={() => {
+          if (!filling) setFillTarget(null);
+        }}
+        footer={
+          <>
+            <button type="button" className="btn" disabled={filling} onClick={() => setFillTarget(null)}>
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={filling || !fillProject}
+              onClick={() => void fill()}
+            >
+              {filling ? t('common.working') : t('templates.createDocument')}
+            </button>
+          </>
+        }
+      >
+        {fillTarget ? (
+          <div className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block text-xs">
+                <span className="mb-1 block font-medium">{t('templates.project')}</span>
+                <select
+                  className="input"
+                  value={fillProject}
+                  onChange={(event) => setFillProject(event.target.value)}
+                >
+                  {fillProjects.length === 0 ? <option value="">{t('templates.noProjects')}</option> : null}
+                  {fillProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs">
+                <span className="mb-1 block font-medium">{t('templates.outputName')}</span>
+                <input
+                  className="input"
+                  value={fillName}
+                  onChange={(event) => setFillName(event.target.value)}
+                />
+              </label>
+            </div>
+            {fillTarget.fields.map((field) => (
+              <label key={field.name} className="block text-xs">
+                <span className="mb-1 block font-medium">
+                  {field.label || field.name}
+                  {field.required ? ' *' : ''}
+                </span>
+                {field.type === 'array' || field.type === 'object' ? (
+                  <textarea
+                    className="input min-h-20 font-mono text-[11px]"
+                    value={fillValues[field.name] ?? ''}
+                    placeholder={field.type === 'array' ? '[{"name":"..."}]' : '{"key":"value"}'}
+                    onChange={(event) =>
+                      setFillValues((prev) => ({ ...prev, [field.name]: event.target.value }))
+                    }
+                  />
+                ) : (
+                  <input
+                    className="input"
+                    value={fillValues[field.name] ?? ''}
+                    onChange={(event) =>
+                      setFillValues((prev) => ({ ...prev, [field.name]: event.target.value }))
+                    }
+                  />
+                )}
+                {field.type === 'array' ? (
+                  <span className="mt-1 block text-[10px] text-slate-400">
+                    {t('templates.arrayHint')}
+                  </span>
+                ) : null}
+              </label>
+            ))}
+            {fillError ? (
+              <p className="rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                {fillError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </Modal>
 
       <Modal

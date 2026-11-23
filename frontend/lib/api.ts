@@ -233,6 +233,14 @@ export const api = {
     request<{ deleted: boolean }>(`/api/templates/${templateId}`, { method: 'DELETE' }),
   markupTemplate: (templateId: string) =>
     request<DocumentTemplate>(`/api/templates/${templateId}/markup`, { method: 'POST' }),
+  fillTemplate: (
+    templateId: string,
+    payload: { parent_id: string; name?: string; data: Record<string, unknown> },
+  ) =>
+    request<WorkNode>(`/api/templates/${templateId}/fill`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   createTemplateFromNode: (
     nodeId: string,
     payload: { name?: string; description?: string },

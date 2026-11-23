@@ -85,6 +85,41 @@ def test_xlsx_replacements() -> None:
     assert [field["name"] for field in fields] == ["tenant"]
 
 
+def test_xlsx_row_loops_repeat_and_remove_markers() -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "Позиция"
+    sheet["B1"] = "Количество"
+    sheet["A2"] = "{% for item in items %}"
+    sheet["B2"] = "{{ item.name }}"
+    sheet["C2"] = "{{ item.qty }}"
+    sheet["D2"] = "{% endfor %}"
+    sheet["A4"] = "После таблицы"
+    source = io.BytesIO()
+    workbook.save(source)
+
+    fields, config = detect_fields("xlsx", source.getvalue())
+    assert [field["name"] for field in fields] == ["items"]
+    assert "items" in config["loops"]
+
+    rendered = _render_xlsx(
+        None,
+        source.getvalue(),
+        {"items": [{"name": "Болт", "qty": 2}, {"name": "Гайка", "qty": 5}, {"name": "Шайба", "qty": 8}]},
+    )
+    result = load_workbook(io.BytesIO(rendered), data_only=False)
+    active = result.active
+    assert active["A1"].value == "Позиция"
+    assert active["A2"].value in (None, "")
+    assert active["B2"].value == "Болт"
+    assert active["C2"].value == "2"
+    assert active["B3"].value == "Гайка"
+    assert active["C4"].value == "8"
+    assert active["A6"].value == "После таблицы"
+    assert "{%" not in str(active["A2"].value or "")
+    result.close()
+
+
 def test_pdf_is_not_a_template_kind() -> None:
     try:
         detect_fields("pdf", b"%PDF-1.7")
