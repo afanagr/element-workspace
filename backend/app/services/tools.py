@@ -26,6 +26,7 @@ from app.services import nodes as node_service
 from app.services import office_convert
 from app.services import templates as template_service
 from app.services.documents import build_pdf_parts, build_text_document, pdf_page_count
+from app.services.document_specs import DocumentSpecError
 from app.services.indexer import enqueue_index
 from app.services.parsing import parse_document
 from app.services.storage import decode_bytes, storage
@@ -134,8 +135,11 @@ TOOL_SPECS: list[ToolSpec] = [
             "Create or overwrite a text/Markdown/CSV/JSON/Excel/DOCX/PDF file. "
             "For .xlsx, .docx and .pdf the content is rendered into the real format: "
             "Markdown tables, **bold**, *italic*, `code` and fenced code blocks are "
-            "supported; a JSON spec ({blocks:[...]} for DOCX, {sheets:[...]} for XLSX) "
-            "gives precise tables, styles and cell formats."
+            "supported; a JSON spec gives precise tables, styles and formats. "
+            "DOCX spec: {blocks:[{type:'heading',text:'...',level:1}, "
+            "{type:'table',header:['A'],rows:[['B']]}, {type:'paragraph',text:'...'}]}. "
+            "XLSX spec: {sheets:[{name:'Sheet1',rows:[['A'],[1]],header:true}]}. "
+            "Invalid specs are rejected before any file is created."
         ),
         parameters=_obj(
             {
@@ -875,7 +879,10 @@ async def _write_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     content = str(args.get("content"))
     ext = node_service.extension_of(name)
     if ext in (".xlsx", ".xlsm", ".docx", ".pdf", ".csv"):
-        payload = await anyio.to_thread.run_sync(build_text_document, name, content)
+        try:
+            payload = await anyio.to_thread.run_sync(build_text_document, name, content)
+        except DocumentSpecError as exc:
+            raise ToolError(str(exc)) from exc
     else:
         payload = content.encode("utf-8")
 

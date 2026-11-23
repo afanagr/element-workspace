@@ -10,6 +10,7 @@ from typing import Any, Sequence
 
 from app.config import settings
 from app.logging_config import get_logger
+from app.services.document_specs import parse_docx_text, parse_xlsx_text
 
 logger = get_logger(__name__)
 
@@ -274,16 +275,8 @@ def _add_code_block(document: Any, code: str) -> None:
 
 
 def _docx_blocks(text: str) -> list[Any] | None:
-    stripped = (text or "").lstrip()
-    if not stripped.startswith("{"):
-        return None
-    try:
-        payload = json.loads(stripped)
-    except (TypeError, ValueError):
-        return None
-    if isinstance(payload, dict) and isinstance(payload.get("blocks"), list):
-        return payload["blocks"]
-    return None
+    spec = parse_docx_text(text)
+    return [block.as_block() for block in spec.blocks] if spec is not None else None
 
 
 def _render_docx_markdown(document: Any, text: str) -> None:
@@ -720,9 +713,9 @@ def build_text_document(name: str, text: str) -> bytes:
 
     ext = Path(name).suffix.lower()
     if ext in (".xlsx", ".xlsm"):
-        spec = _xlsx_json(text)
+        spec = parse_xlsx_text(text)
         if spec is not None:
-            return build_xlsx(spec)
+            return build_xlsx(spec.model_dump()["sheets"])
         return build_xlsx({"Sheet1": _rows_from_text(text)})
     if ext == ".docx":
         return build_docx(text)
